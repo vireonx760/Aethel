@@ -5,9 +5,10 @@ use aethel_gui::core::renderer::WidgetInstance;
 use aethel_gui::gui::binding::{BoolSignal, F32Signal, U32Signal};
 use aethel_gui::gui::geometry::{BoxConstraints, Point, Rect, Size};
 use aethel_gui::gui::paint::PaintCtx;
+use aethel_gui::gui::text::{set_buffer_size, set_buffer_text, shape_text, text_area};
 use aethel_gui::gui::widget::{GuiManager, Widget};
 use aethel_gui::widgets::{Button, Checkbox, Label, Panel, ProgressBar, SliderLabeled};
-use glyphon::{Attrs, Buffer, Color, Family, FontSystem, Metrics, Shaping, TextArea, TextBounds};
+use glyphon::{Attrs, Buffer, Color, Family, FontSystem, Metrics, TextArea, TextBounds};
 use std::any::Any;
 use std::fmt::Write as _;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -172,19 +173,19 @@ impl Widget for SceneLabelOverlay {
             for label in labels.iter() {
                 let scale = if label.selected { 15.0 } else { 12.0 };
                 let mut buffer = Buffer::new(font_system, Metrics::new(scale, scale * 1.25));
-                buffer.set_size(font_system, 220.0, 28.0);
+                set_buffer_size(&mut buffer, font_system, 220.0, 28.0);
                 let color = if label.selected {
                     Color::rgba(255, 226, 120, 255)
                 } else {
                     Color::rgba(176, 204, 230, 220)
                 };
-                buffer.set_text(
+                set_buffer_text(
+                    &mut buffer,
                     font_system,
                     label.text,
                     Attrs::new().family(Family::SansSerif).color(color),
-                    Shaping::Advanced,
                 );
-                buffer.shape_until_scroll(font_system);
+                shape_text(&mut buffer, font_system);
                 buffers.push(buffer);
             }
         }
@@ -200,23 +201,22 @@ impl Widget for SceneLabelOverlay {
         if let Ok(labels) = self.store.labels.lock() {
             for label in labels.iter() {
                 if let Some(buffer) = buffers.get(*bi) {
-                    areas.push(TextArea {
+                    areas.push(text_area(
                         buffer,
-                        left: label.x,
-                        top: label.y,
-                        scale: 1.0,
-                        bounds: TextBounds {
+                        label.x,
+                        label.y,
+                        TextBounds {
                             left: 0,
                             top: 0,
                             right: 4096,
                             bottom: 4096,
                         },
-                        default_color: if label.selected {
+                        if label.selected {
                             Color::rgba(255, 226, 120, 255)
                         } else {
                             Color::rgba(176, 204, 230, 220)
                         },
-                    });
+                    ));
                     *bi += 1;
                 }
             }
@@ -383,16 +383,16 @@ impl Widget for TelemetryReadout {
     fn prepare_text_buffers(&mut self, font_system: &mut FontSystem, buffers: &mut Vec<Buffer>) {
         self.telemetry.write_text(&mut self.text);
         let mut buffer = Buffer::new(font_system, Metrics::new(14.0, 19.0));
-        buffer.set_size(font_system, self.size[0], self.size[1]);
-        buffer.set_text(
+        set_buffer_size(&mut buffer, font_system, self.size[0], self.size[1]);
+        set_buffer_text(
+            &mut buffer,
             font_system,
             &self.text,
             Attrs::new()
                 .family(Family::Monospace)
                 .color(Color::rgba(214, 226, 240, 255)),
-            Shaping::Advanced,
         );
-        buffer.shape_until_scroll(font_system);
+        shape_text(&mut buffer, font_system);
         buffers.push(buffer);
     }
 
@@ -419,14 +419,13 @@ impl Widget for TelemetryReadout {
                     bottom: (self.pos[1] + self.size[1]) as i32,
                 }
             };
-            areas.push(TextArea {
+            areas.push(text_area(
                 buffer,
-                left: self.pos[0],
-                top: self.pos[1],
-                scale: 1.0,
+                self.pos[0],
+                self.pos[1],
                 bounds,
-                default_color: Color::rgba(214, 226, 240, 255),
-            });
+                Color::rgba(214, 226, 240, 255),
+            ));
             *bi += 1;
         }
     }
@@ -482,16 +481,16 @@ impl Widget for SelectionReadout {
     fn prepare_text_buffers(&mut self, font_system: &mut FontSystem, buffers: &mut Vec<Buffer>) {
         self.telemetry.write_text(&mut self.text);
         let mut buffer = Buffer::new(font_system, Metrics::new(15.0, 19.0));
-        buffer.set_size(font_system, self.size[0], self.size[1]);
-        buffer.set_text(
+        set_buffer_size(&mut buffer, font_system, self.size[0], self.size[1]);
+        set_buffer_text(
+            &mut buffer,
             font_system,
             &self.text,
             Attrs::new()
                 .family(Family::SansSerif)
                 .color(Color::rgba(230, 238, 248, 255)),
-            Shaping::Advanced,
         );
-        buffer.shape_until_scroll(font_system);
+        shape_text(&mut buffer, font_system);
         buffers.push(buffer);
     }
 
@@ -503,19 +502,18 @@ impl Widget for SelectionReadout {
         bi: &mut usize,
     ) {
         if let Some(buffer) = buffers.get(*bi) {
-            areas.push(TextArea {
+            areas.push(text_area(
                 buffer,
-                left: self.pos[0],
-                top: self.pos[1],
-                scale: 1.0,
-                bounds: TextBounds {
+                self.pos[0],
+                self.pos[1],
+                TextBounds {
                     left: self.pos[0] as i32,
                     top: self.pos[1] as i32,
                     right: (self.pos[0] + self.size[0]) as i32,
                     bottom: (self.pos[1] + self.size[1]) as i32,
                 },
-                default_color: Color::rgba(230, 238, 248, 255),
-            });
+                Color::rgba(230, 238, 248, 255),
+            ));
             *bi += 1;
         }
     }

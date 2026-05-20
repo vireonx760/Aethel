@@ -362,8 +362,8 @@ impl SpaceRenderer {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Interstellar Architect Pipeline Layout"),
-            bind_group_layouts: &[&uniform_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&uniform_layout)],
+            immediate_size: 0,
         });
 
         let body_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -371,17 +371,19 @@ impl SpaceRenderer {
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: "body_vs",
+                entry_point: Some("body_vs"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
                 buffers: &[body_instance_layout()],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: "body_fs",
+                entry_point: Some("body_fs"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
             }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
@@ -394,7 +396,8 @@ impl SpaceRenderer {
             },
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
+            cache: None,
         });
 
         let line_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -402,17 +405,19 @@ impl SpaceRenderer {
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: "line_vs",
+                entry_point: Some("line_vs"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
                 buffers: &[line_vertex_layout()],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: "line_fs",
+                entry_point: Some("line_fs"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
             }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::LineList,
@@ -425,7 +430,8 @@ impl SpaceRenderer {
             },
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
+            cache: None,
         });
 
         let body_capacity = INITIAL_BODY_CAPACITY;
@@ -492,6 +498,7 @@ impl SpaceRenderer {
                 label: Some("Interstellar Architect Space Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: ctx.view,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -506,6 +513,7 @@ impl SpaceRenderer {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
 
             if !self.body_instances.is_empty() {
@@ -805,13 +813,20 @@ mod tests {
 
     #[test]
     fn shader_validates_as_wgsl() {
-        let module = naga::front::wgsl::parse_str(SPACE_WGSL).expect("space shader must parse");
-        naga::valid::Validator::new(
+        let parsed = naga::front::wgsl::parse_str(SPACE_WGSL);
+        assert!(parsed.is_ok(), "space shader must parse: {parsed:?}");
+        let Ok(module) = parsed else {
+            return;
+        };
+        let validated = naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
             naga::valid::Capabilities::all(),
         )
-        .validate(&module)
-        .expect("space shader must validate");
+        .validate(&module);
+        assert!(
+            validated.is_ok(),
+            "space shader must validate: {validated:?}"
+        );
     }
 
     #[test]

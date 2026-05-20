@@ -3,8 +3,9 @@ use crate::core::renderer::WidgetInstance;
 use crate::gui::geometry::{BoxConstraints, Point, Rect, Size};
 use crate::gui::paint::{PaintCtx, ShaderMode};
 use crate::gui::shader::CustomShader;
+use crate::gui::text::{set_buffer_size, set_buffer_text, shape_text, text_area};
 use crate::gui::widget::Widget;
-use glyphon::{Attrs, Buffer, Color, Family, FontSystem, Metrics, Shaping, TextArea, TextBounds};
+use glyphon::{Attrs, Buffer, Color, Family, FontSystem, Metrics, TextArea, TextBounds};
 use std::any::Any;
 
 #[derive(Debug, Clone)]
@@ -358,8 +359,14 @@ impl WidgetBuilder {
 
 fn push_buffer(fs: &mut FontSystem, buffers: &mut Vec<Buffer>, item: &BuiltText) {
     let mut buffer = Buffer::new(fs, Metrics::new(item.font_size, item.font_size * 1.25));
-    buffer.set_size(fs, item.rect.width.max(1.0), item.rect.height.max(1.0));
-    buffer.set_text(
+    set_buffer_size(
+        &mut buffer,
+        fs,
+        item.rect.width.max(1.0),
+        item.rect.height.max(1.0),
+    );
+    set_buffer_text(
+        &mut buffer,
         fs,
         &item.text,
         Attrs::new().family(Family::SansSerif).color(Color::rgba(
@@ -368,9 +375,8 @@ fn push_buffer(fs: &mut FontSystem, buffers: &mut Vec<Buffer>, item: &BuiltText)
             item.color[2],
             item.color[3],
         )),
-        Shaping::Advanced,
     );
-    buffer.shape_until_scroll(fs);
+    shape_text(&mut buffer, fs);
     buffers.push(buffer);
 }
 
@@ -381,14 +387,13 @@ fn push_area<'a>(
     item: &BuiltText,
     areas: &mut Vec<TextArea<'a>>,
 ) {
-    areas.push(TextArea {
+    areas.push(text_area(
         buffer,
-        left: abs.x,
-        top: abs.y + ((abs.height - item.font_size * 1.25).max(0.0) * 0.5),
-        scale: 1.0,
+        abs.x,
+        abs.y + ((abs.height - item.font_size * 1.25).max(0.0) * 0.5),
         bounds,
-        default_color: Color::rgba(item.color[0], item.color[1], item.color[2], item.color[3]),
-    });
+        Color::rgba(item.color[0], item.color[1], item.color[2], item.color[3]),
+    ));
 }
 
 #[cfg(test)]

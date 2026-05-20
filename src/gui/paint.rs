@@ -1,4 +1,4 @@
-﻿use crate::core::renderer::WidgetInstance;
+use crate::core::renderer::WidgetInstance;
 use crate::gui::clip::{
     ClipRect, ClipStack, ClipToken, InstanceClip, ScissorRect, instance_bounds, sanitize_instance,
 };
@@ -43,9 +43,11 @@ impl ShaderMode {
     }
 }
 
-#[inline]
+#[inline(always)]
 pub fn custom_shader_key(mode: f32) -> Option<u32> {
-    if mode.is_finite() && mode >= FIRST_CUSTOM_SHADER_MODE {
+    if mode < FIRST_CUSTOM_SHADER_MODE {
+        None
+    } else if mode.is_finite() {
         Some(mode.round() as u32)
     } else {
         None
@@ -62,7 +64,7 @@ pub struct PaintRect {
 }
 
 impl PaintRect {
-    #[inline]
+    #[inline(always)]
     pub fn new(pos: [f32; 2], size: [f32; 2], color: [f32; 4]) -> Self {
         Self {
             pos,
@@ -73,19 +75,19 @@ impl PaintRect {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn radius(mut self, radius: f32) -> Self {
         self.radius = radius;
         self
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn mode(mut self, mode: ShaderMode) -> Self {
         self.mode = mode;
         self
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn into_instance(self) -> WidgetInstance {
         WidgetInstance {
             pos: self.pos,
@@ -217,6 +219,7 @@ impl FramePaint {
         self.batches.capacity()
     }
 
+    #[inline(always)]
     fn push(&mut self, layer: RenderLayer, clip: Option<ClipRect>, instance: WidgetInstance) {
         if self.instances.len() == self.instances.capacity() {
             self.stats.instance_capacity_growths += 1;
@@ -327,7 +330,7 @@ impl<'a> PaintCtx<'a> {
         self.clips.pop(token);
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn push_rect(&mut self, rect: PaintRect) {
         self.push_instance(rect.into_instance());
     }
@@ -348,6 +351,7 @@ impl<'a> PaintCtx<'a> {
         self.frame.instances().len()
     }
 
+    #[inline(always)]
     pub fn push_instance(&mut self, mut instance: WidgetInstance) {
         if !sanitize_instance(&mut instance) {
             self.frame.stats.skipped_instances += 1;
@@ -408,8 +412,15 @@ mod tests {
     fn paint_ctx_culls_instances_outside_clip() {
         let mut frame = FramePaint::new();
         let mut ctx = PaintCtx::new(&mut frame);
-        let clip = ClipRect::new(0.0, 0.0, 10.0, 10.0).unwrap();
-        let token = ctx.push_clip_rect(clip).unwrap();
+        let clip = ClipRect {
+            x: 0.0,
+            y: 0.0,
+            width: 10.0,
+            height: 10.0,
+        };
+        let Some(token) = ctx.push_clip_rect(clip) else {
+            unreachable!("valid root clip should push");
+        };
         ctx.push_rect(PaintRect::new([20.0, 20.0], [5.0, 5.0], [1.0; 4]));
         ctx.pop_clip(token);
 
@@ -421,8 +432,15 @@ mod tests {
     fn paint_ctx_groups_same_clip_into_one_batch() {
         let mut frame = FramePaint::new();
         let mut ctx = PaintCtx::new(&mut frame);
-        let clip = ClipRect::new(0.0, 0.0, 100.0, 100.0).unwrap();
-        let token = ctx.push_clip_rect(clip).unwrap();
+        let clip = ClipRect {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 100.0,
+        };
+        let Some(token) = ctx.push_clip_rect(clip) else {
+            unreachable!("valid root clip should push");
+        };
         ctx.push_rect(PaintRect::new([0.0, 0.0], [5.0, 5.0], [1.0; 4]));
         ctx.push_rect(PaintRect::new([10.0, 10.0], [5.0, 5.0], [1.0; 4]));
         ctx.pop_clip(token);
@@ -450,5 +468,16 @@ mod tests {
             Some(FIRST_CUSTOM_SHADER_MODE as u32)
         );
         assert_eq!(frame.batches()[2].shader_key, None);
+    }
+
+    #[test]
+    fn custom_shader_key_accepts_only_custom_finite_modes() {
+        assert_eq!(custom_shader_key(0.0), None);
+        assert_eq!(
+            custom_shader_key(FIRST_CUSTOM_SHADER_MODE),
+            Some(FIRST_CUSTOM_SHADER_MODE as u32)
+        );
+        assert_eq!(custom_shader_key(f32::INFINITY), None);
+        assert_eq!(custom_shader_key(f32::NAN), None);
     }
 }

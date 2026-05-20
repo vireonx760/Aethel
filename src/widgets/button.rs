@@ -6,9 +6,10 @@ use crate::core::renderer::WidgetInstance;
 use crate::gui::command::{CommandId, UpdateCtx};
 use crate::gui::geometry::{BoxConstraints, Point, Rect, Size};
 use crate::gui::paint::PaintCtx;
+use crate::gui::text::{set_buffer_size, set_buffer_text, shape_text, text_area};
 use crate::gui::widget::Widget;
 use glam::Vec2;
-use glyphon::{Attrs, Buffer, Color, Family, FontSystem, Metrics, Shaping, TextArea, TextBounds};
+use glyphon::{Attrs, Buffer, Color, Family, FontSystem, Metrics, TextArea, TextBounds};
 
 pub type ButtonCallback = Arc<Mutex<dyn FnMut() + Send + Sync>>;
 
@@ -226,7 +227,7 @@ impl Widget for Button {
         let font_size = (self.size[1] * 0.5).clamp(12.0, 32.0);
         let mut buffer = Buffer::new(font_system, Metrics::new(font_size, font_size * 1.2));
 
-        buffer.set_size(font_system, self.size[0], self.size[1]);
+        set_buffer_size(&mut buffer, font_system, self.size[0], self.size[1]);
 
         let text_color = if self.enabled {
             self.text_color
@@ -241,13 +242,13 @@ impl Widget for Button {
             (a * 255.0) as u8,
         );
 
-        buffer.set_text(
+        set_buffer_text(
+            &mut buffer,
             font_system,
             &self.text,
             Attrs::new().family(Family::SansSerif).color(color),
-            Shaping::Advanced,
         );
-        buffer.shape_until_scroll(font_system);
+        shape_text(&mut buffer, font_system);
         buffers.push(buffer);
     }
 
@@ -297,19 +298,18 @@ impl Widget for Button {
                 }
             };
 
-            areas.push(TextArea {
+            areas.push(text_area(
                 buffer,
                 left,
                 top,
-                scale: 1.0,
                 bounds,
-                default_color: Color::rgba(
+                Color::rgba(
                     (r * 255.0) as u8,
                     (g * 255.0) as u8,
                     (b * 255.0) as u8,
                     (a * 255.0) as u8,
                 ),
-            });
+            ));
             *bi += 1;
         }
     }

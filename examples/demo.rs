@@ -7,6 +7,6 @@ mod sim;
 #[path = "demo/ui.rs"]
 mod ui;
 
-fn main() {
-    app::run();
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    app::run()
 }

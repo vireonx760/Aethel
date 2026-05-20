@@ -3,10 +3,10 @@ use crate::gui::shader::CustomShader;
 use std::mem;
 use wgpu::{
     BindGroup, BlendState, Buffer, BufferAddress, ColorTargetState, ColorWrites, Device,
-    FragmentState, MultisampleState, PipelineLayout, PipelineLayoutDescriptor, PrimitiveState,
-    PrimitiveTopology, RenderPass, RenderPipeline, RenderPipelineDescriptor, ShaderModule,
-    ShaderModuleDescriptor, ShaderSource, TextureFormat, VertexBufferLayout, VertexState,
-    VertexStepMode, vertex_attr_array,
+    FragmentState, MultisampleState, PipelineCompilationOptions, PipelineLayout,
+    PipelineLayoutDescriptor, PrimitiveState, PrimitiveTopology, RenderPass, RenderPipeline,
+    RenderPipelineDescriptor, ShaderModule, ShaderModuleDescriptor, ShaderSource, TextureFormat,
+    VertexBufferLayout, VertexState, VertexStepMode, vertex_attr_array,
 };
 
 pub struct PipelineCache {
@@ -49,9 +49,14 @@ impl PipelineCache {
         device: &Device,
         bind_group_layouts: &[&wgpu::BindGroupLayout],
     ) -> PipelineLayout {
+        let bind_group_layouts = bind_group_layouts
+            .iter()
+            .copied()
+            .map(Some)
+            .collect::<Vec<_>>();
         device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("AethelGUI Pipeline Layout"),
-            bind_group_layouts,
+            bind_group_layouts: &bind_group_layouts,
             ..Default::default()
         })
     }
@@ -140,7 +145,8 @@ pub fn create_instance_pipeline(
         layout: Some(layout),
         vertex: VertexState {
             module: shader,
-            entry_point: vertex_entry,
+            entry_point: Some(vertex_entry),
+            compilation_options: PipelineCompilationOptions::default(),
             buffers: &[VertexBufferLayout {
                 array_stride: mem::size_of::<WidgetInstance>() as BufferAddress,
                 step_mode: VertexStepMode::Instance,
@@ -153,12 +159,13 @@ pub fn create_instance_pipeline(
         },
         fragment: Some(FragmentState {
             module: shader,
-            entry_point: fragment_entry,
+            entry_point: Some(fragment_entry),
             targets: &[Some(ColorTargetState {
                 format,
                 blend: Some(BlendState::ALPHA_BLENDING),
                 write_mask: ColorWrites::ALL,
             })],
+            compilation_options: PipelineCompilationOptions::default(),
         }),
         primitive: PrimitiveState {
             topology: PrimitiveTopology::TriangleStrip,
@@ -166,7 +173,8 @@ pub fn create_instance_pipeline(
         },
         depth_stencil: None,
         multisample: MultisampleState::default(),
-        multiview: None,
+        multiview_mask: None,
+        cache: None,
     })
 }
 

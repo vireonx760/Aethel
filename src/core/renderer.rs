@@ -2,7 +2,12 @@ use crate::gpu_core::{DEFAULT_INSTANCE_CAPACITY, GpuAccelerator, create_pipeline
 use crate::gui::paint::FramePaint;
 use crate::gui::shader::CustomShader;
 use bytemuck::{Pod, Zeroable};
-use glyphon::{FontSystem, Resolution, SwashCache, TextArea, TextAtlas, TextRenderer};
+use glyphon::{
+    Cache as GlyphCache, FontSystem, Resolution, SwashCache, TextArea, TextAtlas, TextRenderer,
+    Viewport,
+};
+use std::error::Error;
+use std::fmt;
 use std::ops::Range;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
@@ -18,14 +23,16 @@ fn select_backends() -> Backends {
     return Backends::VULKAN;
 }
 
-/// Fifo = vsync 60fps fallback.
-fn select_present_mode(caps: &SurfaceCapabilities) -> PresentMode {
+/// Fifo is the stable vsync fallback when low-latency modes are unavailable.
+fn select_present_mode(caps: &SurfaceCapabilities) -> Option<PresentMode> {
     if caps.present_modes.contains(&PresentMode::Mailbox) {
-        PresentMode::Mailbox
+        Some(PresentMode::Mailbox)
     } else if caps.present_modes.contains(&PresentMode::Immediate) {
-        PresentMode::Immediate
+        Some(PresentMode::Immediate)
+    } else if caps.present_modes.contains(&PresentMode::Fifo) {
+        Some(PresentMode::Fifo)
     } else {
-        PresentMode::Fifo
+        caps.present_modes.first().copied()
     }
 }
 
@@ -94,6 +101,31 @@ struct Uniforms {
     _pad: [f32; 2],
 }
 
+#[derive(Debug)]
+pub enum RendererInitError {
+    CreateSurface(CreateSurfaceError),
+    RequestAdapter(RequestAdapterError),
+    RequestDevice(RequestDeviceError),
+    MissingSurfaceFormat,
+    MissingPresentMode,
+    MissingAlphaMode,
+}
+
+impl fmt::Display for RendererInitError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::CreateSurface(err) => write!(f, "failed to create wgpu surface: {err}"),
+            Self::RequestAdapter(err) => write!(f, "failed to request GPU adapter: {err}"),
+            Self::RequestDevice(err) => write!(f, "failed to create wgpu device: {err}"),
+            Self::MissingSurfaceFormat => write!(f, "surface does not expose a texture format"),
+            Self::MissingPresentMode => write!(f, "surface does not expose a present mode"),
+            Self::MissingAlphaMode => write!(f, "surface does not expose an alpha mode"),
+        }
+    }
+}
+
+impl Error for RendererInitError {}
+
 pub struct Renderer {
     _window: Arc<Window>,
     device: Device,
@@ -105,26 +137,27 @@ pub struct Renderer {
     bind_group: BindGroup,
     pub font_system: FontSystem,
     swash_cache: SwashCache,
+    _glyph_cache: GlyphCache,
+    viewport: Viewport,
     atlas: TextAtlas,
     text_renderer: TextRenderer,
     regular_text_active: bool,
     text_renderer_layers: Vec<TextRenderer>,
+    text_layer_active: Vec<bool>,
     active_text_layers: usize,
     text_renderer_overlay: TextRenderer,
     overlay_text_active: bool,
 }
 
 impl Renderer {
-    pub async fn new(window: Arc<Window>) -> Self {
-        let instance = Instance::new(InstanceDescriptor {
-            backends: select_backends(),
-            dx12_shader_compiler: wgpu::Dx12Compiler::default(),
-            ..InstanceDescriptor::default()
-        });
+    pub async fn new(window: Arc<Window>) -> Result<Self, RendererInitError> {
+        let mut instance_desc = InstanceDescriptor::new_without_display_handle();
+        instance_desc.backends = select_backends();
+        let instance = Instance::new(instance_desc);
 
         let surface: Surface<'static> = instance
             .create_surface(Arc::clone(&window))
-            .expect("failed to create wgpu surface");
+            .map_err(RendererInitError::CreateSurface)?;
 
         let adapter = instance
             .request_adapter(&RequestAdapterOptions {
@@ -133,28 +166,34 @@ impl Renderer {
                 force_fallback_adapter: false,
             })
             .await
-            .expect("no suitable GPU adapter found");
+            .map_err(RendererInitError::RequestAdapter)?;
 
         let (device, queue) = adapter
-            .request_device(
-                &DeviceDescriptor {
-                    required_limits: Limits::downlevel_defaults()
-                        .using_resolution(adapter.limits()),
-                    ..DeviceDescriptor::default()
-                },
-                None,
-            )
+            .request_device(&DeviceDescriptor {
+                required_limits: Limits::downlevel_defaults().using_resolution(adapter.limits()),
+                ..DeviceDescriptor::default()
+            })
             .await
-            .expect("failed to create wgpu device");
+            .map_err(RendererInitError::RequestDevice)?;
 
         let caps = surface.get_capabilities(&adapter);
+        let surface_size = window.inner_size();
         let config = SurfaceConfiguration {
             usage: TextureUsages::RENDER_ATTACHMENT,
-            format: caps.formats[0],
-            width: window.inner_size().width,
-            height: window.inner_size().height,
-            present_mode: select_present_mode(&caps), // auto: Mailbox > Immediate > Fifo
-            alpha_mode: caps.alpha_modes[0],
+            format: caps
+                .formats
+                .first()
+                .copied()
+                .ok_or(RendererInitError::MissingSurfaceFormat)?,
+            width: surface_size.width.max(1),
+            height: surface_size.height.max(1),
+            present_mode: select_present_mode(&caps)
+                .ok_or(RendererInitError::MissingPresentMode)?,
+            alpha_mode: caps
+                .alpha_modes
+                .first()
+                .copied()
+                .ok_or(RendererInitError::MissingAlphaMode)?,
             view_formats: vec![],
             desired_maximum_frame_latency: 1,
         };
@@ -208,13 +247,22 @@ impl Renderer {
 
         let font_system = FontSystem::new();
         let swash_cache = SwashCache::new();
-        let mut atlas = TextAtlas::new(&device, &queue, config.format);
+        let glyph_cache = GlyphCache::new(&device);
+        let mut viewport = Viewport::new(&device, &glyph_cache);
+        viewport.update(
+            &queue,
+            Resolution {
+                width: config.width,
+                height: config.height,
+            },
+        );
+        let mut atlas = TextAtlas::new(&device, &queue, &glyph_cache, config.format);
         let text_renderer =
             TextRenderer::new(&mut atlas, &device, MultisampleState::default(), None);
         let text_renderer_overlay =
             TextRenderer::new(&mut atlas, &device, MultisampleState::default(), None);
 
-        Self {
+        Ok(Self {
             _window: window,
             device,
             queue,
@@ -225,14 +273,17 @@ impl Renderer {
             bind_group,
             font_system,
             swash_cache,
+            _glyph_cache: glyph_cache,
+            viewport,
             atlas,
             text_renderer,
             regular_text_active: false,
             text_renderer_layers: Vec::with_capacity(8),
+            text_layer_active: Vec::with_capacity(8),
             active_text_layers: 0,
             text_renderer_overlay,
             overlay_text_active: false,
-        }
+        })
     }
 
     pub fn font_system(&mut self) -> &mut FontSystem {
@@ -270,6 +321,13 @@ impl Renderer {
         self.config.width = size.width;
         self.config.height = size.height;
         self.surface.configure(&self.device, &self.config);
+        self.viewport.update(
+            &self.queue,
+            Resolution {
+                width: size.width,
+                height: size.height,
+            },
+        );
         self.queue.write_buffer(
             &self.uniform_buffer,
             0,
@@ -286,22 +344,20 @@ impl Renderer {
             self.active_text_layers = 0;
             return;
         }
-        self.regular_text_active = true;
         self.active_text_layers = 0;
-        self.text_renderer
+        self.regular_text_active = self
+            .text_renderer
             .prepare(
                 &self.device,
                 &self.queue,
                 &mut self.font_system,
                 &mut self.atlas,
-                Resolution {
-                    width: self.config.width,
-                    height: self.config.height,
-                },
+                &self.viewport,
                 areas.iter().cloned(),
                 &mut self.swash_cache,
             )
-            .unwrap();
+            .map_err(|err| eprintln!("text prepare error: {err}"))
+            .is_ok();
     }
 
     pub fn prepare_regular_text_layers(&mut self, areas: &[TextArea], layers: &[TextLayer]) {
@@ -315,25 +371,32 @@ impl Renderer {
                 None,
             ));
         }
+        if self.text_layer_active.len() < layers.len() {
+            self.text_layer_active.resize(layers.len(), false);
+        }
+        self.text_layer_active[..layers.len()].fill(false);
 
-        for (renderer, layer) in self.text_renderer_layers.iter_mut().zip(layers.iter()) {
+        for (index, (renderer, layer)) in self
+            .text_renderer_layers
+            .iter_mut()
+            .zip(layers.iter())
+            .enumerate()
+        {
             if !layer.has_text() {
                 continue;
             }
-            renderer
+            self.text_layer_active[index] = renderer
                 .prepare(
                     &self.device,
                     &self.queue,
                     &mut self.font_system,
                     &mut self.atlas,
-                    Resolution {
-                        width: self.config.width,
-                        height: self.config.height,
-                    },
+                    &self.viewport,
                     areas[layer.area_range()].iter().cloned(),
                     &mut self.swash_cache,
                 )
-                .unwrap();
+                .map_err(|err| eprintln!("text layer prepare error: {err}"))
+                .is_ok();
         }
     }
 
@@ -342,21 +405,19 @@ impl Renderer {
             self.overlay_text_active = false;
             return;
         }
-        self.overlay_text_active = true;
-        self.text_renderer_overlay
+        self.overlay_text_active = self
+            .text_renderer_overlay
             .prepare(
                 &self.device,
                 &self.queue,
                 &mut self.font_system,
                 &mut self.atlas,
-                Resolution {
-                    width: self.config.width,
-                    height: self.config.height,
-                },
+                &self.viewport,
                 areas.iter().cloned(),
                 &mut self.swash_cache,
             )
-            .unwrap();
+            .map_err(|err| eprintln!("overlay text prepare error: {err}"))
+            .is_ok();
     }
 
     pub fn render(&mut self, instances: &[WidgetInstance], regular_count: usize) {
@@ -367,17 +428,8 @@ impl Renderer {
         self.gpu
             .upload_instances(&self.device, &self.queue, instances);
 
-        let frame = match self.surface.get_current_texture() {
-            Ok(f) => f,
-            Err(SurfaceError::Lost | SurfaceError::Outdated) => {
-                let sz = winit::dpi::PhysicalSize::new(self.config.width, self.config.height);
-                self.resize(sz);
-                return;
-            }
-            Err(e) => {
-                eprintln!("render error: {e}");
-                return;
-            }
+        let Some(frame) = self.acquire_frame() else {
+            return;
         };
 
         let view = frame.texture.create_view(&TextureViewDescriptor::default());
@@ -390,6 +442,7 @@ impl Renderer {
                 label: Some("GUI"),
                 color_attachments: &[Some(RenderPassColorAttachment {
                     view: &view,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: Operations {
                         load: LoadOp::Clear(Color {
@@ -404,6 +457,7 @@ impl Renderer {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
 
             self.gpu.bind_base(&mut rpass, &self.bind_group);
@@ -417,7 +471,12 @@ impl Renderer {
             }
 
             if self.regular_text_active {
-                self.text_renderer.render(&self.atlas, &mut rpass).unwrap();
+                if let Err(err) = self
+                    .text_renderer
+                    .render(&self.atlas, &self.viewport, &mut rpass)
+                {
+                    eprintln!("text render error: {err}");
+                }
                 self.gpu.bind_base(&mut rpass, &self.bind_group);
                 crate::gpu_core::apply_scissor(
                     &mut rpass,
@@ -432,10 +491,12 @@ impl Renderer {
                     .draw_raw_range(&mut rpass, &self.bind_group, regular_end..total);
             }
 
-            if self.overlay_text_active {
-                self.text_renderer_overlay
-                    .render(&self.atlas, &mut rpass)
-                    .unwrap();
+            if self.overlay_text_active
+                && let Err(err) =
+                    self.text_renderer_overlay
+                        .render(&self.atlas, &self.viewport, &mut rpass)
+            {
+                eprintln!("overlay text render error: {err}");
             }
         }
 
@@ -456,17 +517,8 @@ impl Renderer {
         self.gpu
             .plan_batches(frame_paint.batches(), self.config.width, self.config.height);
 
-        let frame = match self.surface.get_current_texture() {
-            Ok(frame) => frame,
-            Err(SurfaceError::Lost | SurfaceError::Outdated) => {
-                let size = winit::dpi::PhysicalSize::new(self.config.width, self.config.height);
-                self.resize(size);
-                return;
-            }
-            Err(err) => {
-                eprintln!("render error: {err}");
-                return;
-            }
+        let Some(frame) = self.acquire_frame() else {
+            return;
         };
 
         let view = frame.texture.create_view(&TextureViewDescriptor::default());
@@ -479,6 +531,7 @@ impl Renderer {
                 label: Some("GUI Batched"),
                 color_attachments: &[Some(RenderPassColorAttachment {
                     view: &view,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: Operations {
                         load: LoadOp::Clear(Color {
@@ -493,6 +546,7 @@ impl Renderer {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
 
             self.gpu.bind_base(&mut rpass, &self.bind_group);
@@ -509,7 +563,12 @@ impl Renderer {
 
             crate::gpu_core::apply_scissor(&mut rpass, None, self.config.width, self.config.height);
             if self.regular_text_active {
-                self.text_renderer.render(&self.atlas, &mut rpass).unwrap();
+                if let Err(err) = self
+                    .text_renderer
+                    .render(&self.atlas, &self.viewport, &mut rpass)
+                {
+                    eprintln!("text render error: {err}");
+                }
                 self.gpu.bind_base(&mut rpass, &self.bind_group);
             }
 
@@ -524,10 +583,12 @@ impl Renderer {
             }
 
             crate::gpu_core::apply_scissor(&mut rpass, None, self.config.width, self.config.height);
-            if self.overlay_text_active {
-                self.text_renderer_overlay
-                    .render(&self.atlas, &mut rpass)
-                    .unwrap();
+            if self.overlay_text_active
+                && let Err(err) =
+                    self.text_renderer_overlay
+                        .render(&self.atlas, &self.viewport, &mut rpass)
+            {
+                eprintln!("overlay text render error: {err}");
             }
         }
 
@@ -574,17 +635,8 @@ impl Renderer {
         self.gpu
             .plan_batches(frame_paint.batches(), self.config.width, self.config.height);
 
-        let frame = match self.surface.get_current_texture() {
-            Ok(frame) => frame,
-            Err(SurfaceError::Lost | SurfaceError::Outdated) => {
-                let size = winit::dpi::PhysicalSize::new(self.config.width, self.config.height);
-                self.resize(size);
-                return;
-            }
-            Err(err) => {
-                eprintln!("render error: {err}");
-                return;
-            }
+        let Some(frame) = self.acquire_frame() else {
+            return;
         };
 
         let view = frame.texture.create_view(&TextureViewDescriptor::default());
@@ -601,6 +653,7 @@ impl Renderer {
                 label: Some("GUI Layered"),
                 color_attachments: &[Some(RenderPassColorAttachment {
                     view: &view,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: Operations {
                         load: if has_prepass {
@@ -619,6 +672,7 @@ impl Renderer {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
 
             self.gpu.bind_base(&mut rpass, &self.bind_group);
@@ -644,6 +698,11 @@ impl Renderer {
                 if layer.has_text()
                     && layer_index < self.active_text_layers
                     && layer_index < self.text_renderer_layers.len()
+                    && self
+                        .text_layer_active
+                        .get(layer_index)
+                        .copied()
+                        .unwrap_or(false)
                 {
                     crate::gpu_core::apply_scissor(
                         &mut rpass,
@@ -651,9 +710,13 @@ impl Renderer {
                         self.config.width,
                         self.config.height,
                     );
-                    self.text_renderer_layers[layer_index]
-                        .render(&self.atlas, &mut rpass)
-                        .unwrap();
+                    if let Err(err) = self.text_renderer_layers[layer_index].render(
+                        &self.atlas,
+                        &self.viewport,
+                        &mut rpass,
+                    ) {
+                        eprintln!("text layer render error: {err}");
+                    }
                     self.gpu.bind_base(&mut rpass, &self.bind_group);
                 }
             }
@@ -679,16 +742,36 @@ impl Renderer {
             }
 
             crate::gpu_core::apply_scissor(&mut rpass, None, self.config.width, self.config.height);
-            if self.overlay_text_active {
-                self.text_renderer_overlay
-                    .render(&self.atlas, &mut rpass)
-                    .unwrap();
+            if self.overlay_text_active
+                && let Err(err) =
+                    self.text_renderer_overlay
+                        .render(&self.atlas, &self.viewport, &mut rpass)
+            {
+                eprintln!("overlay text render error: {err}");
             }
         }
 
         self.queue.submit(Some(encoder.finish()));
         frame.present();
         self.atlas.trim();
+    }
+
+    fn acquire_frame(&mut self) -> Option<SurfaceTexture> {
+        match self.surface.get_current_texture() {
+            CurrentSurfaceTexture::Success(frame) | CurrentSurfaceTexture::Suboptimal(frame) => {
+                Some(frame)
+            }
+            CurrentSurfaceTexture::Outdated | CurrentSurfaceTexture::Lost => {
+                let size = winit::dpi::PhysicalSize::new(self.config.width, self.config.height);
+                self.resize(size);
+                None
+            }
+            CurrentSurfaceTexture::Timeout | CurrentSurfaceTexture::Occluded => None,
+            CurrentSurfaceTexture::Validation => {
+                eprintln!("render error: surface validation failed");
+                None
+            }
+        }
     }
 }
 
@@ -699,7 +782,8 @@ mod tests {
     #[test]
     fn gui_shader_parses_as_wgsl() {
         let shader = include_str!("../shaders/gui.wgsl");
-        naga::front::wgsl::parse_str(shader).expect("gui shader must be valid WGSL");
+        let parsed = naga::front::wgsl::parse_str(shader);
+        assert!(parsed.is_ok(), "gui shader must be valid WGSL: {parsed:?}");
     }
 
     #[test]

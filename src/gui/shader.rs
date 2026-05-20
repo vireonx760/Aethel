@@ -110,6 +110,6 @@ mod tests {
         assert_eq!(first.as_f32(), FIRST_CUSTOM_SHADER_MODE);
         assert_eq!(second.as_f32(), FIRST_CUSTOM_SHADER_MODE + 1.0);
         assert_eq!(registry.len(), 2);
-        assert_eq!(registry.get(first).unwrap().name, "a");
+        assert!(matches!(registry.get(first), Some(shader) if shader.name == "a"));
     }
 }

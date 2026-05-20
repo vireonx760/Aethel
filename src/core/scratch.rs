@@ -174,6 +174,7 @@ impl WarmFrameReport {
 #[derive(Debug, Clone)]
 pub struct ScratchVecPool<T> {
     available: Vec<Vec<T>>,
+    retained_capacity: usize,
     in_use: usize,
     policy: ScratchPolicy,
     stats: ScratchStats,
@@ -185,6 +186,7 @@ impl<T> ScratchVecPool<T> {
     pub fn new(policy: ScratchPolicy) -> Self {
         Self {
             available: Vec::new(),
+            retained_capacity: 0,
             in_use: 0,
             policy,
             stats: ScratchStats::default(),
@@ -202,7 +204,9 @@ impl<T> ScratchVecPool<T> {
     pub fn preallocate(&mut self, buffers: usize, capacity: usize) {
         self.available.reserve(buffers);
         for _ in 0..buffers {
-            self.available.push(Vec::with_capacity(capacity));
+            let buffer = Vec::with_capacity(capacity);
+            self.retained_capacity = self.retained_capacity.saturating_add(buffer.capacity());
+            self.available.push(buffer);
         }
         self.stats.high_water_capacity =
             self.stats.high_water_capacity.max(self.retained_capacity());
@@ -225,6 +229,7 @@ impl<T> ScratchVecPool<T> {
 
         let mut buffer = match self.available.pop() {
             Some(mut buffer) => {
+                self.retained_capacity = self.retained_capacity.saturating_sub(buffer.capacity());
                 buffer.clear();
                 buffer
             }
@@ -264,6 +269,7 @@ impl<T> ScratchVecPool<T> {
 
         let idle_index = self.available.len();
         if self.policy.should_keep(idle_index, buffer.capacity()) {
+            self.retained_capacity = self.retained_capacity.saturating_add(buffer.capacity());
             self.available.push(buffer);
         } else {
             self.stats.record_trim(1);
@@ -284,6 +290,7 @@ impl<T> ScratchVecPool<T> {
         }
 
         self.available = kept;
+        self.retained_capacity = self.available.iter().map(Vec::capacity).sum();
         let trimmed = before.saturating_sub(self.available.len());
         self.stats.record_trim(trimmed);
         trimmed
@@ -311,7 +318,7 @@ impl<T> ScratchVecPool<T> {
 
     #[inline]
     pub fn retained_capacity(&self) -> usize {
-        self.available.iter().map(Vec::capacity).sum()
+        self.retained_capacity
     }
 
     #[inline]
@@ -362,6 +369,14 @@ impl<T> ScratchVecLease<'_, T> {
     pub fn into_vec(mut self) -> Vec<T> {
         self.buffer.take().unwrap_or_default()
     }
+
+    #[inline(always)]
+    pub fn extend(&mut self, iter: impl IntoIterator<Item = T>) {
+        match self.buffer.as_mut() {
+            Some(buffer) => buffer.extend(iter),
+            None => unreachable!("scratch vec lease was taken"),
+        }
+    }
 }
 
 impl<T> Deref for ScratchVecLease<'_, T> {
@@ -369,14 +384,20 @@ impl<T> Deref for ScratchVecLease<'_, T> {
 
     #[inline]
     fn deref(&self) -> &Self::Target {
-        self.buffer.as_ref().expect("scratch vec lease was taken")
+        match self.buffer.as_ref() {
+            Some(buffer) => buffer,
+            None => unreachable!("scratch vec lease was taken"),
+        }
     }
 }
 
 impl<T> DerefMut for ScratchVecLease<'_, T> {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.buffer.as_mut().expect("scratch vec lease was taken")
+        match self.buffer.as_mut() {
+            Some(buffer) => buffer,
+            None => unreachable!("scratch vec lease was taken"),
+        }
     }
 }
 
@@ -391,6 +412,7 @@ impl<T> Drop for ScratchVecLease<'_, T> {
 #[derive(Debug, Clone)]
 pub struct ScratchStringPool {
     available: Vec<String>,
+    retained_capacity: usize,
     in_use: usize,
     policy: ScratchPolicy,
     stats: ScratchStats,
@@ -401,6 +423,7 @@ impl ScratchStringPool {
     pub fn new(policy: ScratchPolicy) -> Self {
         Self {
             available: Vec::new(),
+            retained_capacity: 0,
             in_use: 0,
             policy,
             stats: ScratchStats::default(),
@@ -417,7 +440,9 @@ impl ScratchStringPool {
     pub fn preallocate(&mut self, buffers: usize, capacity: usize) {
         self.available.reserve(buffers);
         for _ in 0..buffers {
-            self.available.push(String::with_capacity(capacity));
+            let buffer = String::with_capacity(capacity);
+            self.retained_capacity = self.retained_capacity.saturating_add(buffer.capacity());
+            self.available.push(buffer);
         }
         self.stats.high_water_capacity =
             self.stats.high_water_capacity.max(self.retained_capacity());
@@ -439,6 +464,7 @@ impl ScratchStringPool {
 
         let mut buffer = match self.available.pop() {
             Some(mut buffer) => {
+                self.retained_capacity = self.retained_capacity.saturating_sub(buffer.capacity());
                 buffer.clear();
                 buffer
             }
@@ -478,6 +504,7 @@ impl ScratchStringPool {
 
         let idle_index = self.available.len();
         if self.policy.should_keep(idle_index, buffer.capacity()) {
+            self.retained_capacity = self.retained_capacity.saturating_add(buffer.capacity());
             self.available.push(buffer);
         } else {
             self.stats.record_trim(1);
@@ -498,6 +525,7 @@ impl ScratchStringPool {
         }
 
         self.available = kept;
+        self.retained_capacity = self.available.iter().map(String::capacity).sum();
         let trimmed = before.saturating_sub(self.available.len());
         self.stats.record_trim(trimmed);
         trimmed
@@ -515,7 +543,7 @@ impl ScratchStringPool {
 
     #[inline]
     pub fn retained_capacity(&self) -> usize {
-        self.available.iter().map(String::capacity).sum()
+        self.retained_capacity
     }
 
     #[inline]
@@ -556,6 +584,14 @@ impl ScratchStringLease<'_> {
     pub fn into_string(mut self) -> String {
         self.buffer.take().unwrap_or_default()
     }
+
+    #[inline(always)]
+    pub fn push_str(&mut self, text: &str) {
+        match self.buffer.as_mut() {
+            Some(buffer) => buffer.push_str(text),
+            None => unreachable!("scratch string lease was taken"),
+        }
+    }
 }
 
 impl Deref for ScratchStringLease<'_> {
@@ -563,18 +599,20 @@ impl Deref for ScratchStringLease<'_> {
 
     #[inline]
     fn deref(&self) -> &Self::Target {
-        self.buffer
-            .as_ref()
-            .expect("scratch string lease was taken")
+        match self.buffer.as_ref() {
+            Some(buffer) => buffer,
+            None => unreachable!("scratch string lease was taken"),
+        }
     }
 }
 
 impl DerefMut for ScratchStringLease<'_> {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.buffer
-            .as_mut()
-            .expect("scratch string lease was taken")
+        match self.buffer.as_mut() {
+            Some(buffer) => buffer,
+            None => unreachable!("scratch string lease was taken"),
+        }
     }
 }
 
@@ -906,6 +944,18 @@ mod tests {
     }
 
     #[test]
+    fn vec_pool_tracks_retained_capacity_without_scanning() {
+        let mut pool = ScratchVecPool::<u32>::with_preallocated(2, 8, ScratchPolicy::unbounded());
+        assert_eq!(pool.retained_capacity(), 16);
+
+        let buffer = pool.checkout_with_capacity(4);
+        assert_eq!(pool.retained_capacity(), 8);
+
+        pool.recycle(buffer);
+        assert_eq!(pool.retained_capacity(), 16);
+    }
+
+    #[test]
     fn vec_lease_returns_buffer_on_drop() {
         let mut pool = ScratchVecPool::<usize>::default();
         {
@@ -927,6 +977,18 @@ mod tests {
         let text = pool.checkout_with_capacity(5);
         assert!(text.capacity() >= 16);
         assert!(text.is_empty());
+    }
+
+    #[test]
+    fn string_pool_tracks_retained_capacity_without_scanning() {
+        let mut pool = ScratchStringPool::with_preallocated(2, 16, ScratchPolicy::unbounded());
+        assert_eq!(pool.retained_capacity(), 32);
+
+        let text = pool.checkout_with_capacity(8);
+        assert_eq!(pool.retained_capacity(), 16);
+
+        pool.recycle(text);
+        assert_eq!(pool.retained_capacity(), 32);
     }
 
     #[test]

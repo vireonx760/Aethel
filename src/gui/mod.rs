@@ -9,6 +9,7 @@ pub mod layout_enums;
 pub mod paint;
 pub mod shader;
 pub mod style;
+pub mod text;
 pub mod text_cache;
 pub mod widget;
 pub mod widget_builder;

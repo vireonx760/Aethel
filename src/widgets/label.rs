@@ -2,8 +2,9 @@
 use crate::core::renderer::WidgetInstance;
 use crate::gui::geometry::{BoxConstraints, Point, Rect, Size};
 use crate::gui::paint::PaintCtx;
+use crate::gui::text::{set_buffer_size, set_buffer_text, shape_text, text_area};
 use crate::gui::widget::Widget;
-use glyphon::{Attrs, Buffer, Color, Family, FontSystem, Metrics, Shaping, TextArea, TextBounds};
+use glyphon::{Attrs, Buffer, Color, Family, FontSystem, Metrics, TextArea, TextBounds};
 use std::any::Any;
 
 pub struct Label {
@@ -60,10 +61,11 @@ impl Widget for Label {
     fn prepare_text_buffers(&mut self, font_system: &mut FontSystem, buffers: &mut Vec<Buffer>) {
         let lh = self.scale * 1.2;
         let mut buffer = Buffer::new(font_system, Metrics::new(self.scale, lh));
-        buffer.set_size(font_system, f32::INFINITY, f32::INFINITY);
+        set_buffer_size(&mut buffer, font_system, f32::INFINITY, f32::INFINITY);
 
         let [r, g, b, a] = self.color;
-        buffer.set_text(
+        set_buffer_text(
+            &mut buffer,
             font_system,
             &self.text,
             Attrs::new().family(Family::SansSerif).color(Color::rgba(
@@ -72,9 +74,8 @@ impl Widget for Label {
                 (b * 255.0) as u8,
                 (a * 255.0) as u8,
             )),
-            Shaping::Advanced,
         );
-        buffer.shape_until_scroll(font_system);
+        shape_text(&mut buffer, font_system);
 
         let mut max_w = 0.0f32;
         let mut line_cnt = 0usize;
@@ -85,8 +86,13 @@ impl Widget for Label {
         self.cached_text_width = (max_w + 4.0).max(1.0);
         self.cached_text_height = (line_cnt.max(1) as f32 * lh + 4.0).max(1.0);
 
-        buffer.set_size(font_system, self.cached_text_width, self.cached_text_height);
-        buffer.shape_until_scroll(font_system);
+        set_buffer_size(
+            &mut buffer,
+            font_system,
+            self.cached_text_width,
+            self.cached_text_height,
+        );
+        shape_text(&mut buffer, font_system);
 
         buffers.push(buffer);
     }
@@ -117,19 +123,18 @@ impl Widget for Label {
                 }
             };
 
-            areas.push(TextArea {
+            areas.push(text_area(
                 buffer,
-                left: self.pos[0],
-                top: self.pos[1],
-                scale: 1.0,
+                self.pos[0],
+                self.pos[1],
                 bounds,
-                default_color: Color::rgba(
+                Color::rgba(
                     (r * 255.0) as u8,
                     (g * 255.0) as u8,
                     (b * 255.0) as u8,
                     (a * 255.0) as u8,
                 ),
-            });
+            ));
             *bi += 1;
         }
     }

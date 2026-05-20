@@ -8,11 +8,15 @@ use aethel_gui::core::renderer::Renderer;
 use aethel_gui::core::scheduler::{FrameScheduler, RedrawReason};
 use aethel_gui::gui::geometry::Point;
 use aethel_gui::gui::widget::GuiManager;
+use std::error::Error;
+use std::io;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use winit::event::{Event, WindowEvent};
-use winit::event_loop::EventLoop;
-use winit::window::WindowBuilder;
+use winit::application::ApplicationHandler;
+use winit::dpi::LogicalSize;
+use winit::event::WindowEvent;
+use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::window::{Window, WindowId};
 
 const WIDTH: u32 = 1440;
 const HEIGHT: u32 = 900;
@@ -26,164 +30,286 @@ enum CameraMode {
     Tactical,
 }
 
-pub fn run() {
-    let event_loop = EventLoop::new().expect("failed to create event loop");
-    let window = Arc::new(
-        WindowBuilder::new()
+pub fn run() -> Result<(), Box<dyn Error>> {
+    let event_loop = EventLoop::new()?;
+    let mut app = DemoApp::new();
+    let run_result = event_loop.run_app(&mut app);
+
+    if let Some(error) = app.fatal_error {
+        return Err(io::Error::other(error).into());
+    }
+
+    run_result?;
+    Ok(())
+}
+
+struct DemoApp {
+    window: Option<Arc<Window>>,
+    window_id: Option<WindowId>,
+    renderer: Option<Renderer>,
+    space_renderer: Option<SpaceRenderer>,
+    input: InputManager,
+    gui: GuiManager,
+    signals: EditorSignals,
+    actions: EditorActions,
+    telemetry: Arc<UiTelemetry>,
+    selection: Arc<SelectionTelemetry>,
+    labels: Arc<SceneLabelStore>,
+    sim: Simulation,
+    camera: Camera3D,
+    last_selected: Option<usize>,
+    last_asteroid_count: usize,
+    text_buffers: Vec<glyphon::Buffer>,
+    last_frame: Instant,
+    scheduler: FrameScheduler,
+    fatal_error: Option<String>,
+}
+
+impl DemoApp {
+    fn new() -> Self {
+        let mut gui = GuiManager::new();
+        let signals = EditorSignals::new();
+        let actions = EditorActions::default();
+        let telemetry = Arc::new(UiTelemetry::default());
+        let selection = Arc::new(SelectionTelemetry::default());
+        let labels = Arc::new(SceneLabelStore::new());
+        build_editor(
+            &mut gui,
+            &signals,
+            &actions,
+            Arc::clone(&telemetry),
+            Arc::clone(&selection),
+            Arc::clone(&labels),
+        );
+
+        let sim = Simulation::new();
+        let now = Instant::now();
+        Self {
+            window: None,
+            window_id: None,
+            renderer: None,
+            space_renderer: None,
+            input: InputManager::new(),
+            gui,
+            signals,
+            actions,
+            telemetry,
+            selection,
+            labels,
+            camera: Camera3D::default(),
+            last_selected: sim.selected_index(),
+            last_asteroid_count: 1_600,
+            sim,
+            text_buffers: Vec::with_capacity(192),
+            last_frame: now,
+            scheduler: FrameScheduler::new(now),
+            fatal_error: None,
+        }
+    }
+
+    fn fail(&mut self, event_loop: &ActiveEventLoop, error: impl ToString) {
+        self.fatal_error = Some(error.to_string());
+        event_loop.exit();
+    }
+
+    fn request_frame_if_needed(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(window) = self.window.as_ref() else {
+            return;
+        };
+
+        let now = Instant::now();
+        let game_interval = game_interval(&self.signals, self.sim.launch().is_some());
+        let repaint_interval = min_interval(self.gui.next_repaint_interval(), game_interval);
+        self.scheduler.set_repaint_interval(repaint_interval, now);
+
+        let mouse_active = self.input.lmb.held || self.input.rmb.held;
+        if self.scheduler.wants_redraw(now) || mouse_active {
+            window.request_redraw();
+        }
+        event_loop.set_control_flow(self.scheduler.control_flow(now, mouse_active));
+    }
+
+    fn redraw(&mut self) {
+        let (Some(renderer), Some(space_renderer)) =
+            (self.renderer.as_mut(), self.space_renderer.as_mut())
+        else {
+            return;
+        };
+
+        let now = Instant::now();
+        let dt = now.duration_since(self.last_frame).as_secs_f32().min(0.1);
+        self.last_frame = now;
+
+        self.gui.update(dt, &self.input);
+        let camera_mode = camera_mode_from_u32(self.actions.camera_mode());
+        update_camera(&mut self.camera, &self.input, camera_mode);
+
+        let settings = settings_from_signals(&self.signals);
+        if self.actions.take_reset() {
+            self.sim.reset();
+            self.last_asteroid_count = settings.asteroid_count;
+        }
+        if self.actions.take_stabilize() {
+            self.sim.stabilize();
+        }
+        if self.actions.take_rebuild_rings() || settings.asteroid_count != self.last_asteroid_count
+        {
+            self.sim.rebuild_asteroids(settings.asteroid_count);
+            self.last_asteroid_count = settings.asteroid_count;
+        }
+
+        let viewport = renderer.surface_size();
+        let pointer_over_gui = self
+            .gui
+            .captures_pointer_at(Point::new(self.input.mouse_pos.x, self.input.mouse_pos.y));
+        let gui_guard_width = if pointer_over_gui {
+            f32::INFINITY
+        } else {
+            GUI_GUARD_WIDTH
+        };
+        self.sim.update(
+            dt,
+            &settings,
+            self.camera,
+            &self.input,
+            viewport,
+            gui_guard_width,
+        );
+        sync_selected_body(
+            &mut self.sim,
+            &self.signals,
+            &self.selection,
+            &mut self.last_selected,
+        );
+        update_follow_camera(&mut self.camera, &self.sim, camera_mode, dt);
+        let sim_stats = self.sim.stats();
+        self.signals.stability.set(sim_stats.stable_score);
+        self.labels.update(&self.sim, self.camera, viewport);
+        self.input.end_frame();
+
+        self.gui.collect_paint();
+        let mut text_areas = Vec::with_capacity(self.text_buffers.len().max(192));
+        let text_layers = self.gui.prepare_text_layers(
+            renderer.font_system(),
+            &mut self.text_buffers,
+            &mut text_areas,
+        );
+        renderer.prepare_regular_text_layers(&text_areas, &text_layers.regular);
+        renderer.prepare_overlay_text(&text_areas[text_layers.overlay_start..]);
+
+        let frame_paint = self.gui.frame_paint();
+        renderer.render_frame_layered_with_prepass(
+            frame_paint,
+            &text_layers.regular,
+            |device, queue, encoder, view| {
+                space_renderer.render(SpaceRenderContext {
+                    device,
+                    queue,
+                    encoder,
+                    view,
+                    sim: &self.sim,
+                    settings: &settings,
+                    camera: self.camera,
+                    viewport,
+                    time: sim_stats.elapsed,
+                });
+            },
+        );
+        self.telemetry.set(sim_stats, space_renderer.stats());
+
+        let repaint_interval = min_interval(
+            self.gui.next_repaint_interval(),
+            game_interval(&self.signals, self.sim.launch().is_some()),
+        );
+        self.scheduler
+            .after_redraw_with_interval(now, repaint_interval);
+    }
+}
+
+impl ApplicationHandler for DemoApp {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.window.is_some() {
+            return;
+        }
+
+        let attrs = Window::default_attributes()
             .with_title("Interstellar Architect - AethelGUI GPU Demo")
-            .with_inner_size(winit::dpi::LogicalSize::new(WIDTH, HEIGHT))
-            .build(&event_loop)
-            .expect("failed to create window"),
-    );
+            .with_inner_size(LogicalSize::new(WIDTH, HEIGHT));
+        let window = match event_loop.create_window(attrs) {
+            Ok(window) => Arc::new(window),
+            Err(err) => {
+                self.fail(event_loop, err);
+                return;
+            }
+        };
 
-    let mut renderer = pollster::block_on(Renderer::new(Arc::clone(&window)));
-    let mut space_renderer = SpaceRenderer::new(renderer.device(), renderer.surface_format());
+        let mut renderer = match pollster::block_on(Renderer::new(Arc::clone(&window))) {
+            Ok(renderer) => renderer,
+            Err(err) => {
+                self.fail(event_loop, err);
+                return;
+            }
+        };
+        let space_renderer = SpaceRenderer::new(renderer.device(), renderer.surface_format());
+        self.gui
+            .for_each_custom_shader(|shader| renderer.register_custom_shader(shader));
 
-    let mut input = InputManager::new();
-    let mut gui = GuiManager::new();
-    let signals = EditorSignals::new();
-    let actions = EditorActions::default();
-    let telemetry = Arc::new(UiTelemetry::default());
-    let selection = Arc::new(SelectionTelemetry::default());
-    let labels = Arc::new(SceneLabelStore::new());
-    build_editor(
-        &mut gui,
-        &signals,
-        &actions,
-        Arc::clone(&telemetry),
-        Arc::clone(&selection),
-        Arc::clone(&labels),
-    );
-    gui.for_each_custom_shader(|shader| renderer.register_custom_shader(shader));
+        self.window_id = Some(window.id());
+        self.window = Some(window);
+        self.space_renderer = Some(space_renderer);
+        self.renderer = Some(renderer);
+        self.scheduler
+            .mark_dirty(RedrawReason::Resize, Instant::now());
+    }
 
-    let mut sim = Simulation::new();
-    let mut camera = Camera3D::default();
-    let mut last_selected = sim.selected_index();
-    let mut last_asteroid_count = signals.asteroid_count.get() as usize;
-    let mut text_buffers: Vec<glyphon::Buffer> = Vec::with_capacity(192);
-    let window_id = window.id();
-    let mut last_frame = Instant::now();
-    let mut scheduler = FrameScheduler::new(last_frame);
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        self.request_frame_if_needed(event_loop);
+    }
 
-    event_loop
-        .run(move |event, elwt| match event {
-            Event::AboutToWait => {
-                let now = Instant::now();
-                let game_interval = game_interval(&signals, sim.launch().is_some());
-                let repaint_interval = min_interval(gui.next_repaint_interval(), game_interval);
-                scheduler.set_repaint_interval(repaint_interval, now);
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        window_id: WindowId,
+        event: WindowEvent,
+    ) {
+        if Some(window_id) != self.window_id {
+            return;
+        }
 
-                let mouse_active = input.lmb.held || input.rmb.held;
-                if scheduler.wants_redraw(now) || mouse_active {
+        self.input.process_event(&event);
+
+        match event {
+            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::Resized(size) => {
+                if let Some(renderer) = self.renderer.as_mut() {
+                    renderer.resize(size);
+                }
+                if let Some(window) = self.window.as_ref() {
+                    self.scheduler
+                        .mark_dirty(RedrawReason::Resize, Instant::now());
                     window.request_redraw();
                 }
-                elwt.set_control_flow(scheduler.control_flow(now, mouse_active));
             }
-            Event::WindowEvent {
-                window_id: wid,
-                event,
-            } if wid == window_id => {
-                input.process_event(&event);
-
-                match event {
-                    WindowEvent::CloseRequested => elwt.exit(),
-                    WindowEvent::Resized(size) => {
-                        renderer.resize(size);
-                        scheduler.mark_dirty(RedrawReason::Resize, Instant::now());
-                        window.request_redraw();
-                    }
-                    WindowEvent::RedrawRequested => {
-                        let now = Instant::now();
-                        let dt = now.duration_since(last_frame).as_secs_f32().min(0.1);
-                        last_frame = now;
-
-                        gui.update(dt, &input);
-                        let camera_mode = camera_mode_from_u32(actions.camera_mode());
-                        update_camera(&mut camera, &input, camera_mode);
-
-                        let settings = settings_from_signals(&signals);
-                        if actions.take_reset() {
-                            sim.reset();
-                            last_asteroid_count = settings.asteroid_count;
-                        }
-                        if actions.take_stabilize() {
-                            sim.stabilize();
-                        }
-                        if actions.take_rebuild_rings()
-                            || settings.asteroid_count != last_asteroid_count
-                        {
-                            sim.rebuild_asteroids(settings.asteroid_count);
-                            last_asteroid_count = settings.asteroid_count;
-                        }
-
-                        let viewport = renderer.surface_size();
-                        let pointer_over_gui = gui
-                            .captures_pointer_at(Point::new(input.mouse_pos.x, input.mouse_pos.y));
-                        let gui_guard_width = if pointer_over_gui {
-                            f32::INFINITY
-                        } else {
-                            GUI_GUARD_WIDTH
-                        };
-                        sim.update(dt, &settings, camera, &input, viewport, gui_guard_width);
-                        sync_selected_body(&mut sim, &signals, &selection, &mut last_selected);
-                        update_follow_camera(&mut camera, &sim, camera_mode, dt);
-                        let sim_stats = sim.stats();
-                        signals.stability.set(sim_stats.stable_score);
-                        labels.update(&sim, camera, viewport);
-                        input.end_frame();
-
-                        gui.collect_paint();
-                        let mut text_areas = Vec::with_capacity(text_buffers.len().max(192));
-                        let text_layers = gui.prepare_text_layers(
-                            renderer.font_system(),
-                            &mut text_buffers,
-                            &mut text_areas,
-                        );
-                        renderer.prepare_regular_text_layers(&text_areas, &text_layers.regular);
-                        renderer.prepare_overlay_text(&text_areas[text_layers.overlay_start..]);
-
-                        let frame_paint = gui.frame_paint();
-                        renderer.render_frame_layered_with_prepass(
-                            frame_paint,
-                            &text_layers.regular,
-                            |device, queue, encoder, view| {
-                                space_renderer.render(SpaceRenderContext {
-                                    device,
-                                    queue,
-                                    encoder,
-                                    view,
-                                    sim: &sim,
-                                    settings: &settings,
-                                    camera,
-                                    viewport,
-                                    time: sim_stats.elapsed,
-                                });
-                            },
-                        );
-                        telemetry.set(sim_stats, space_renderer.stats());
-
-                        let repaint_interval = min_interval(
-                            gui.next_repaint_interval(),
-                            game_interval(&signals, sim.launch().is_some()),
-                        );
-                        scheduler.after_redraw_with_interval(now, repaint_interval);
-                    }
-                    WindowEvent::CursorMoved { .. } => {
-                        scheduler.mark_dirty(RedrawReason::Input, Instant::now());
-                        window.request_redraw();
-                    }
-                    WindowEvent::MouseInput { .. }
-                    | WindowEvent::KeyboardInput { .. }
-                    | WindowEvent::MouseWheel { .. } => {
-                        scheduler.mark_dirty(RedrawReason::Input, Instant::now());
-                        window.request_redraw();
-                    }
-                    _ => {}
+            WindowEvent::RedrawRequested => self.redraw(),
+            WindowEvent::CursorMoved { .. } => {
+                if let Some(window) = self.window.as_ref() {
+                    self.scheduler
+                        .mark_dirty(RedrawReason::Input, Instant::now());
+                    window.request_redraw();
+                }
+            }
+            WindowEvent::MouseInput { .. }
+            | WindowEvent::KeyboardInput { .. }
+            | WindowEvent::MouseWheel { .. } => {
+                if let Some(window) = self.window.as_ref() {
+                    self.scheduler
+                        .mark_dirty(RedrawReason::Input, Instant::now());
+                    window.request_redraw();
                 }
             }
             _ => {}
-        })
-        .expect("event loop failed");
+        }
+    }
 }
 
 fn settings_from_signals(signals: &EditorSignals) -> SimulationSettings {

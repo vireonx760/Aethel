@@ -4,9 +4,10 @@ use crate::gui::binding::{F32Signal, I32Signal, U32Signal};
 use crate::gui::command::{CommandId, UpdateCtx};
 use crate::gui::geometry::{BoxConstraints, Point, Rect, Size};
 use crate::gui::paint::PaintCtx;
+use crate::gui::text::{set_buffer_size, set_buffer_text, shape_text, text_area};
 use crate::gui::widget::Widget;
 use glam::Vec2;
-use glyphon::{Attrs, Buffer, Color, Family, FontSystem, Metrics, Shaping, TextArea, TextBounds};
+use glyphon::{Attrs, Buffer, Color, Family, FontSystem, Metrics, TextArea, TextBounds};
 use std::any::Any;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -573,16 +574,16 @@ impl Widget for SliderLabeled {
 
     fn prepare_text_buffers(&mut self, font_system: &mut FontSystem, buffers: &mut Vec<Buffer>) {
         let mut label_buf = Buffer::new(font_system, Metrics::new(14.0, 18.0));
-        label_buf.set_size(font_system, self.length, 20.0);
-        label_buf.set_text(
+        set_buffer_size(&mut label_buf, font_system, self.length, 20.0);
+        set_buffer_text(
+            &mut label_buf,
             font_system,
             &self.label,
             Attrs::new()
                 .family(Family::SansSerif)
                 .color(Color::rgb(180, 180, 190)),
-            Shaping::Advanced,
         );
-        label_buf.shape_until_scroll(font_system);
+        shape_text(&mut label_buf, font_system);
         buffers.push(label_buf);
     }
 
@@ -593,16 +594,16 @@ impl Widget for SliderLabeled {
         let text = self.format_value();
         let width = Self::tooltip_width_for(&text);
         let mut val_buf = Buffer::new(font_system, Metrics::new(13.0, 16.0));
-        val_buf.set_size(font_system, width - 12.0, 20.0);
-        val_buf.set_text(
+        set_buffer_size(&mut val_buf, font_system, width - 12.0, 20.0);
+        set_buffer_text(
+            &mut val_buf,
             font_system,
             &text,
             Attrs::new()
                 .family(Family::Monospace)
                 .color(Color::rgb(50, 200, 255)),
-            Shaping::Advanced,
         );
-        val_buf.shape_until_scroll(font_system);
+        shape_text(&mut val_buf, font_system);
         buffers.push(val_buf);
     }
 
@@ -633,14 +634,7 @@ impl Widget for SliderLabeled {
                 }
             };
 
-            areas.push(TextArea {
-                buffer: buf,
-                left,
-                top,
-                scale: 1.0,
-                bounds,
-                default_color: Color::rgb(180, 180, 190),
-            });
+            areas.push(text_area(buf, left, top, bounds, Color::rgb(180, 180, 190)));
             *bi += 1;
         }
     }
@@ -665,19 +659,18 @@ impl Widget for SliderLabeled {
             let left = rect.x + (rect.width - text_w).max(0.0) * 0.5;
             let top = rect.y + 6.0;
 
-            areas.push(TextArea {
-                buffer: buf,
+            areas.push(text_area(
+                buf,
                 left,
                 top,
-                scale: 1.0,
-                bounds: TextBounds {
+                TextBounds {
                     left: rect.x as i32,
                     top: rect.y as i32,
                     right: (rect.x + rect.width) as i32,
                     bottom: (rect.y + rect.height) as i32,
                 },
-                default_color: Color::rgb(50, 200, 255),
-            });
+                Color::rgb(50, 200, 255),
+            ));
             *bi += 1;
         }
     }

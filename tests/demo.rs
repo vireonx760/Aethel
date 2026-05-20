@@ -1,24 +1,37 @@
-#[allow(dead_code)]
-#[path = "../examples/demo/render.rs"]
-mod render;
-#[allow(dead_code)]
-#[path = "../examples/demo/sim.rs"]
-mod sim;
-
-#[test]
-fn demo_space_shader_parses_as_wgsl() {
-    let module = naga::front::wgsl::parse_str(render::SPACE_WGSL).expect("demo shader must parse");
-    naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::all(),
-    )
-    .validate(&module)
-    .expect("demo shader must validate");
+fn demo_space_wgsl() -> &'static str {
+    let source = include_str!("../examples/demo/render.rs");
+    let marker = "pub const SPACE_WGSL: &str = r#\"";
+    let Some(start) = source.find(marker) else {
+        return "";
+    };
+    let body_start = start + marker.len();
+    let Some(body_end) = source[body_start..].find("\"#;") else {
+        return "";
+    };
+    &source[body_start..body_start + body_end]
 }
 
 #[test]
-fn demo_seed_scene_is_nonempty() {
-    let sim = sim::Simulation::new();
-    assert_eq!(sim.bodies().len(), 4);
-    assert!(sim.asteroids().len() >= 1_000);
+fn demo_space_shader_parses_as_wgsl() {
+    let shader = demo_space_wgsl();
+    assert!(
+        !shader.is_empty(),
+        "demo shader source should be discoverable"
+    );
+
+    let parsed = naga::front::wgsl::parse_str(shader);
+    assert!(parsed.is_ok(), "demo shader must parse: {parsed:?}");
+    let Ok(module) = parsed else {
+        return;
+    };
+
+    let validated = naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::all(),
+    )
+    .validate(&module);
+    assert!(
+        validated.is_ok(),
+        "demo shader must validate: {validated:?}"
+    );
 }

@@ -9,62 +9,66 @@ pub fn all_finite2(values: [f32; 2]) -> bool {
 pub fn all_finite4(values: [f32; 4]) -> bool {
     #[cfg(target_arch = "x86_64")]
     {
-        return unsafe { x86::all_finite4_sse2(values) };
+        unsafe { x86::all_finite4_sse2(values) }
     }
 
     #[cfg(target_arch = "x86")]
     {
         if std::arch::is_x86_feature_detected!("sse2") {
-            return unsafe { x86::all_finite4_sse2(values) };
+            unsafe { x86::all_finite4_sse2(values) }
+        } else {
+            all_finite4_scalar(values)
         }
     }
 
-    #[allow(unreachable_code)]
-    values.iter().all(|value| value.is_finite())
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "x86")))]
+    {
+        all_finite4_scalar(values)
+    }
 }
 
 #[inline]
 pub fn clamp01_f32x4(values: [f32; 4]) -> [f32; 4] {
     #[cfg(target_arch = "x86_64")]
     {
-        return unsafe { x86::clamp01_f32x4_sse2(values) };
+        unsafe { x86::clamp01_f32x4_sse2(values) }
     }
 
     #[cfg(target_arch = "x86")]
     {
         if std::arch::is_x86_feature_detected!("sse2") {
-            return unsafe { x86::clamp01_f32x4_sse2(values) };
+            unsafe { x86::clamp01_f32x4_sse2(values) }
+        } else {
+            clamp01_f32x4_scalar(values)
         }
     }
 
-    #[allow(unreachable_code)]
-    [
-        values[0].clamp(0.0, 1.0),
-        values[1].clamp(0.0, 1.0),
-        values[2].clamp(0.0, 1.0),
-        values[3].clamp(0.0, 1.0),
-    ]
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "x86")))]
+    {
+        clamp01_f32x4_scalar(values)
+    }
 }
 
 #[inline]
 pub fn clamp_f32x2(values: [f32; 2], min: [f32; 2], max: [f32; 2]) -> [f32; 2] {
     #[cfg(target_arch = "x86_64")]
     {
-        return unsafe { x86::clamp_f32x2_sse2(values, min, max) };
+        unsafe { x86::clamp_f32x2_sse2(values, min, max) }
     }
 
     #[cfg(target_arch = "x86")]
     {
         if std::arch::is_x86_feature_detected!("sse2") {
-            return unsafe { x86::clamp_f32x2_sse2(values, min, max) };
+            unsafe { x86::clamp_f32x2_sse2(values, min, max) }
+        } else {
+            clamp_f32x2_scalar(values, min, max)
         }
     }
 
-    #[allow(unreachable_code)]
-    [
-        values[0].clamp(min[0], max[0]),
-        values[1].clamp(min[1], max[1]),
-    ]
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "x86")))]
+    {
+        clamp_f32x2_scalar(values, min, max)
+    }
 }
 
 #[inline]
@@ -133,7 +137,6 @@ pub fn translate_widget_instances(instances: &mut [WidgetInstance], delta: [f32;
         unsafe {
             x86::translate_widget_instances_sse2(instances, delta);
         }
-        return;
     }
 
     #[cfg(target_arch = "x86")]
@@ -142,17 +145,41 @@ pub fn translate_widget_instances(instances: &mut [WidgetInstance], delta: [f32;
             unsafe {
                 x86::translate_widget_instances_sse2(instances, delta);
             }
-            return;
+        } else {
+            translate_widget_instances_scalar(instances, delta);
         }
     }
 
-    #[allow(unreachable_code)]
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "x86")))]
     {
-        for instance in instances {
-            instance.pos[0] += delta[0];
-            instance.pos[1] += delta[1];
-        }
+        translate_widget_instances_scalar(instances, delta);
     }
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+#[inline]
+fn all_finite4_scalar(values: [f32; 4]) -> bool {
+    values.iter().all(|value| value.is_finite())
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+#[inline]
+fn clamp01_f32x4_scalar(values: [f32; 4]) -> [f32; 4] {
+    [
+        values[0].clamp(0.0, 1.0),
+        values[1].clamp(0.0, 1.0),
+        values[2].clamp(0.0, 1.0),
+        values[3].clamp(0.0, 1.0),
+    ]
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+#[inline]
+fn clamp_f32x2_scalar(values: [f32; 2], min: [f32; 2], max: [f32; 2]) -> [f32; 2] {
+    [
+        values[0].clamp(min[0], max[0]),
+        values[1].clamp(min[1], max[1]),
+    ]
 }
 
 #[cfg(not(target_arch = "x86_64"))]
@@ -164,6 +191,15 @@ fn intersect_ltrb_scalar(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
         a[2].min(b[2]),
         a[3].min(b[3]),
     ]
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+#[inline]
+fn translate_widget_instances_scalar(instances: &mut [WidgetInstance], delta: [f32; 2]) {
+    for instance in instances {
+        instance.pos[0] += delta[0];
+        instance.pos[1] += delta[1];
+    }
 }
 
 #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]

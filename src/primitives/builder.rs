@@ -1,7 +1,7 @@
 use crate::core::renderer::WidgetInstance;
 use crate::gui::geometry::Rect as GeomRect;
 use crate::gui::paint::PaintCtx;
-use crate::primitives::{Line, Rect};
+use crate::primitives::Rect;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Point3 {
@@ -227,12 +227,9 @@ impl PrimitiveBuilder {
         color: [f32; 4],
         width: f32,
     ) -> &mut Self {
-        self.push_instance(
-            Line::new(start[0], start[1], end[0], end[1])
-                .color(color)
-                .width(width)
-                .to_instance(),
-        );
+        let instance = line_instance(start, end, color, width);
+        let bounds = line_bounds(start, end, width);
+        self.push_instance_with_bounds(instance, bounds);
         self
     }
 
@@ -253,7 +250,7 @@ impl PrimitiveBuilder {
             return self;
         }
         self.polyline(points, color, width);
-        self.line(*points.last().unwrap(), points[0], color, width)
+        self.line(points[points.len() - 1], points[0], color, width)
     }
 
     pub fn line_3d(
@@ -326,10 +323,23 @@ impl PrimitiveBuilder {
         let Some(rect) = instance_bounds(instance) else {
             return;
         };
+        self.expand_bounds_rect(rect);
+    }
+
+    #[inline]
+    fn expand_bounds_rect(&mut self, rect: GeomRect) {
         self.bounds = Some(match self.bounds {
             Some(current) => union_rect(current, rect),
             None => rect,
         });
+    }
+
+    #[inline]
+    fn push_instance_with_bounds(&mut self, instance: WidgetInstance, bounds: Option<GeomRect>) {
+        if let Some(bounds) = bounds {
+            self.expand_bounds_rect(bounds);
+        }
+        self.instances.push(instance);
     }
 }
 
@@ -354,6 +364,45 @@ fn union_rect(a: GeomRect, b: GeomRect) -> GeomRect {
     let x1 = a.right().max(b.right());
     let y1 = a.bottom().max(b.bottom());
     GeomRect::new(x0, y0, x1 - x0, y1 - y0)
+}
+
+#[inline]
+fn line_instance(start: [f32; 2], end: [f32; 2], color: [f32; 4], width: f32) -> WidgetInstance {
+    let dx = end[0] - start[0];
+    let dy = end[1] - start[1];
+    let length = (dx * dx + dy * dy).sqrt();
+    let center_x = (start[0] + end[0]) * 0.5;
+    let center_y = (start[1] + end[1]) * 0.5;
+
+    WidgetInstance {
+        pos: [center_x - length * 0.5, center_y - width * 0.5],
+        size: [length, width],
+        color,
+        radius: width * 0.5,
+        rotation: dy.atan2(dx),
+        ..Default::default()
+    }
+}
+
+#[inline]
+fn line_bounds(start: [f32; 2], end: [f32; 2], width: f32) -> Option<GeomRect> {
+    if width <= 0.0 {
+        return None;
+    }
+    let half = width * 0.5;
+    let x0 = start[0].min(end[0]) - half;
+    let y0 = start[1].min(end[1]) - half;
+    let x1 = start[0].max(end[0]) + half;
+    let y1 = start[1].max(end[1]) + half;
+    let width = x1 - x0;
+    let height = y1 - y0;
+    (x0.is_finite()
+        && y0.is_finite()
+        && width.is_finite()
+        && height.is_finite()
+        && width > 0.0
+        && height > 0.0)
+        .then_some(GeomRect::new(x0, y0, width, height))
 }
 
 fn instance_bounds(instance: &WidgetInstance) -> Option<GeomRect> {
@@ -433,8 +482,23 @@ mod tests {
     fn rotated_line_expands_bounds() {
         let mut builder = PrimitiveBuilder::new();
         builder.line([0.0, 0.0], [10.0, 10.0], [1.0; 4], 2.0);
-        let bounds = builder.bounds().unwrap();
-        assert!(bounds.width > 10.0);
-        assert!(bounds.height > 10.0);
+        assert!(matches!(
+            builder.bounds(),
+            Some(bounds) if bounds.width > 10.0 && bounds.height > 10.0
+        ));
+    }
+
+    #[test]
+    fn line_bounds_cover_stroke_extents() {
+        let mut builder = PrimitiveBuilder::new();
+        builder.line([10.0, 20.0], [30.0, 20.0], [1.0; 4], 4.0);
+        assert!(matches!(
+            builder.bounds(),
+            Some(bounds)
+                if bounds.x <= 8.0
+                    && bounds.y <= 18.0
+                    && bounds.right() >= 32.0
+                    && bounds.bottom() >= 22.0
+        ));
     }
 }

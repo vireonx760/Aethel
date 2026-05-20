@@ -4,9 +4,10 @@ use crate::gui::binding::BoolSignal;
 use crate::gui::command::{CommandId, UpdateCtx};
 use crate::gui::geometry::{BoxConstraints, Point, Rect, Size};
 use crate::gui::paint::PaintCtx;
+use crate::gui::text::{set_buffer_size, set_buffer_text, shape_text, text_area};
 use crate::gui::widget::Widget;
 use glam::Vec2;
-use glyphon::{Attrs, Buffer, Color, Family, FontSystem, Metrics, Shaping, TextArea, TextBounds};
+use glyphon::{Attrs, Buffer, Color, Family, FontSystem, Metrics, TextArea, TextBounds};
 use std::any::Any;
 use std::sync::{Arc, Mutex};
 
@@ -226,16 +227,16 @@ impl Widget for Checkbox {
         }
 
         let mut buffer = Buffer::new(font_system, Metrics::new(16.0, 20.0));
-        buffer.set_size(font_system, 500.0, 30.0);
-        buffer.set_text(
+        set_buffer_size(&mut buffer, font_system, 500.0, 30.0);
+        set_buffer_text(
+            &mut buffer,
             font_system,
             &self.label,
             Attrs::new()
                 .family(Family::SansSerif)
                 .color(Color::rgb(230, 230, 240)),
-            Shaping::Advanced,
         );
-        buffer.shape_until_scroll(font_system);
+        shape_text(&mut buffer, font_system);
         buffers.push(buffer);
     }
 
@@ -270,14 +271,13 @@ impl Widget for Checkbox {
                 }
             };
 
-            areas.push(TextArea {
+            areas.push(text_area(
                 buffer,
                 left,
                 top,
-                scale: 1.0,
                 bounds,
-                default_color: Color::rgb(230, 230, 240),
-            });
+                Color::rgb(230, 230, 240),
+            ));
             *bi += 1;
         }
     }

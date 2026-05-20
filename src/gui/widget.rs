@@ -723,12 +723,11 @@ mod tests {
         let child_rect = gui.widgets[child].get_rect();
         assert_eq!(child_rect.x, 130.0);
         assert_eq!(child_rect.y, 155.0);
+        let Some(test_widget) = gui.widgets[child].as_any().downcast_ref::<TestWidget>() else {
+            unreachable!("child should be a TestWidget");
+        };
         assert_eq!(
-            gui.widgets[child]
-                .as_any()
-                .downcast_ref::<TestWidget>()
-                .unwrap()
-                .clip,
+            test_widget.clip,
             Some(Rect::new(110.0, 120.0, 200.0, 100.0))
         );
     }

@@ -116,12 +116,13 @@ impl ClipRect {
         point.x >= self.x && point.x < self.right() && point.y >= self.y && point.y < self.bottom()
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn intersects(self, other: Self) -> bool {
-        self.x < other.right()
-            && self.right() > other.x
-            && self.y < other.bottom()
-            && self.bottom() > other.y
+        let ax1 = self.x + self.width;
+        let ay1 = self.y + self.height;
+        let bx1 = other.x + other.width;
+        let by1 = other.y + other.height;
+        self.x < bx1 && ax1 > other.x && self.y < by1 && ay1 > other.y
     }
 
     #[inline]
@@ -247,7 +248,7 @@ impl InstanceClip {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn from_instance(instance: &WidgetInstance) -> Self {
         if instance.use_clip > 0.5 {
             if let Some(rect) = ClipRect::from_min_max(instance.clip_min, instance.clip_max) {
@@ -324,6 +325,7 @@ impl ClipStack {
         }
     }
 
+    #[inline(always)]
     pub fn resolve(&self, clip: InstanceClip) -> Option<Option<ClipRect>> {
         match clip.mode {
             ClipMode::Disabled => Some(None),
@@ -352,17 +354,22 @@ pub fn instance_bounds(instance: &WidgetInstance) -> Option<ClipRect> {
     )
 }
 
-#[inline]
+#[inline(always)]
 pub fn sanitize_instance(instance: &mut WidgetInstance) -> bool {
     let finite = simd::all_finite2(instance.pos)
         && simd::all_finite2(instance.size)
         && simd::all_finite4(instance.color)
         && instance.radius.is_finite()
         && instance.mode.is_finite()
-        && simd::all_finite2(instance.clip_min)
-        && simd::all_finite2(instance.clip_max);
+        && instance.use_clip.is_finite();
 
     if !finite || instance.size[0] <= 0.0 || instance.size[1] <= 0.0 {
+        return false;
+    }
+
+    if instance.use_clip > 0.5
+        && (!simd::all_finite2(instance.clip_min) || !simd::all_finite2(instance.clip_max))
+    {
         return false;
     }
 
@@ -399,15 +406,35 @@ mod tests {
 
     #[test]
     fn clip_intersection_rejects_empty() {
-        let a = ClipRect::new(0.0, 0.0, 10.0, 10.0).unwrap();
-        let b = ClipRect::new(20.0, 20.0, 10.0, 10.0).unwrap();
+        let a = ClipRect {
+            x: 0.0,
+            y: 0.0,
+            width: 10.0,
+            height: 10.0,
+        };
+        let b = ClipRect {
+            x: 20.0,
+            y: 20.0,
+            width: 10.0,
+            height: 10.0,
+        };
         assert_eq!(a.intersection(b), None);
     }
 
     #[test]
     fn clip_intersection_returns_overlap() {
-        let a = ClipRect::new(0.0, 0.0, 10.0, 10.0).unwrap();
-        let b = ClipRect::new(5.0, 4.0, 10.0, 10.0).unwrap();
+        let a = ClipRect {
+            x: 0.0,
+            y: 0.0,
+            width: 10.0,
+            height: 10.0,
+        };
+        let b = ClipRect {
+            x: 5.0,
+            y: 4.0,
+            width: 10.0,
+            height: 10.0,
+        };
         assert_eq!(
             a.intersection(b),
             Some(ClipRect {
@@ -431,5 +458,33 @@ mod tests {
         assert!(sanitize_instance(&mut inst));
         assert_eq!(inst.radius, 2.0);
         assert_eq!(inst.color, [0.0, 0.5, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn sanitize_skips_inactive_clip_bounds() {
+        let mut inst = WidgetInstance {
+            pos: [0.0, 0.0],
+            size: [10.0, 10.0],
+            color: [1.0; 4],
+            use_clip: 0.0,
+            clip_min: [f32::NAN, f32::NAN],
+            clip_max: [f32::NAN, f32::NAN],
+            ..Default::default()
+        };
+        assert!(sanitize_instance(&mut inst));
+    }
+
+    #[test]
+    fn sanitize_rejects_invalid_active_clip_bounds() {
+        let mut inst = WidgetInstance {
+            pos: [0.0, 0.0],
+            size: [10.0, 10.0],
+            color: [1.0; 4],
+            use_clip: 1.0,
+            clip_min: [f32::NAN, 0.0],
+            clip_max: [10.0, 10.0],
+            ..Default::default()
+        };
+        assert!(!sanitize_instance(&mut inst));
     }
 }

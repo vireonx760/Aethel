@@ -46,7 +46,7 @@ impl Triangle {
         let step = step.max(0.5);
 
         let mut verts = [(self.x1, self.y1), (self.x2, self.y2), (self.x3, self.y3)];
-        verts.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        verts.sort_by(|a, b| a.1.total_cmp(&b.1));
         let (xt, yt) = verts[0];
         let (xm, ym) = verts[1];
         let (xb, yb) = verts[2];

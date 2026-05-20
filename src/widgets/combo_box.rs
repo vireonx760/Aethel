@@ -4,9 +4,10 @@ use crate::gui::binding::{SelectionSignal, VecSignal};
 use crate::gui::command::{CommandId, UpdateCtx};
 use crate::gui::geometry::{BoxConstraints, Point, Rect, Size};
 use crate::gui::paint::PaintCtx;
+use crate::gui::text::{set_buffer_size, set_buffer_text, shape_text, text_area};
 use crate::gui::widget::Widget;
 use glam::Vec2;
-use glyphon::{Attrs, Buffer, Color, Family, FontSystem, Metrics, Shaping, TextArea, TextBounds};
+use glyphon::{Attrs, Buffer, Color, Family, FontSystem, Metrics, TextArea, TextBounds};
 use std::any::Any;
 use std::sync::{Arc, Mutex};
 
@@ -476,16 +477,16 @@ impl<T: ComboBoxItem> Widget for ComboBox<T> {
     fn prepare_text_buffers(&mut self, font_system: &mut FontSystem, buffers: &mut Vec<Buffer>) {
         let display_text = self.get_display_text();
         let mut buffer = Buffer::new(font_system, Metrics::new(18.0, 22.0));
-        buffer.set_size(font_system, self.size[0], self.size[1]);
-        buffer.set_text(
+        set_buffer_size(&mut buffer, font_system, self.size[0], self.size[1]);
+        set_buffer_text(
+            &mut buffer,
             font_system,
             &display_text,
             Attrs::new()
                 .family(Family::SansSerif)
                 .color(Color::rgba(230, 230, 240, 255)),
-            Shaping::Advanced,
         );
-        buffer.shape_until_scroll(font_system);
+        shape_text(&mut buffer, font_system);
         buffers.push(buffer);
     }
 
@@ -496,16 +497,16 @@ impl<T: ComboBoxItem> Widget for ComboBox<T> {
         let item_w = self.dropdown_width();
         for item in &self.items {
             let mut b = Buffer::new(font_system, Metrics::new(18.0, 22.0));
-            b.set_size(font_system, item_w - 20.0, self.item_height());
-            b.set_text(
+            set_buffer_size(&mut b, font_system, item_w - 20.0, self.item_height());
+            set_buffer_text(
+                &mut b,
                 font_system,
                 &item.display_name(),
                 Attrs::new()
                     .family(Family::SansSerif)
                     .color(Color::rgba(230, 230, 240, 255)),
-                Shaping::Advanced,
             );
-            b.shape_until_scroll(font_system);
+            shape_text(&mut b, font_system);
             buffers.push(b);
         }
     }
@@ -535,19 +536,18 @@ impl<T: ComboBoxItem> Widget for ComboBox<T> {
                     (top + 22.0) as i32,
                 )
             };
-            areas.push(TextArea {
+            areas.push(text_area(
                 buffer,
                 left,
                 top,
-                scale: 1.0,
-                bounds: TextBounds {
+                TextBounds {
                     left: bl,
                     top: bt,
                     right: br,
                     bottom: bb,
                 },
-                default_color: Color::rgba(230, 230, 240, 255),
-            });
+                Color::rgba(230, 230, 240, 255),
+            ));
             *bi += 1;
         }
     }
@@ -567,19 +567,18 @@ impl<T: ComboBoxItem> Widget for ComboBox<T> {
                 let row = self.item_rect(i);
                 let left = row.x + 10.0;
                 let top = row.y + 4.0;
-                areas.push(TextArea {
+                areas.push(text_area(
                     buffer,
                     left,
                     top,
-                    scale: 1.0,
-                    bounds: TextBounds {
+                    TextBounds {
                         left: left as i32,
                         top: top as i32,
                         right: (row.x + row.width - 10.0) as i32,
                         bottom: (row.y + row.height) as i32,
                     },
-                    default_color: Color::rgba(230, 230, 240, 255),
-                });
+                    Color::rgba(230, 230, 240, 255),
+                ));
                 *bi += 1;
             }
         }

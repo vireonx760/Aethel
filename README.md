@@ -1,7 +1,7 @@
 # AethelGUI
 
 AethelGUI is an attempt at a retained/immediate hybrid Rust GUI runtime built on `wgpu`, `winit`, and `glyphon`.
-Version `0.1.0` serves as a stable baseline for the project's core concepts and API.
+Version `0.1.4` is the migration baseline toward the `0.2.0` foundation: current crates, explicit renderer errors, overlay-safe painting, retained scratch storage, and CI-ready verification.
 
 ## Highlights
 
@@ -20,14 +20,14 @@ Version `0.1.0` serves as a stable baseline for the project's core concepts and 
 ```rust
 use aethel_gui::{AethelGui, widgets::*};
 
-fn main() {
+fn main() -> Result<(), aethel_gui::AethelRunError> {
     AethelGui::new()
         .title("AethelGUI")
         .size(1200, 800)
         .run(|gui| {
             gui.add(Label::new([24.0, 24.0], "AethelGUI").scale(32.0));
             gui.add(Button::new([24.0, 84.0], [180.0, 42.0], "Run"));
-        });
+        })
 }
 ```
 
@@ -44,6 +44,16 @@ cargo run --release --example demo
 ```
 
 `demo` renders a procedural three-star sandbox with thousands of instanced asteroids, orbit prediction lines, a custom WGSL space shader, and an AethelGUI editor overlay. Drag in the space viewport to launch bodies, right-drag to pan, and use the mouse wheel to zoom.
+
+Run CPU-side benchmarks:
+
+```powershell
+cargo run --release --example bench -- --quick
+cargo run --release --example bench -- --save bench-current.tsv
+cargo run --release --example bench -- --baseline bench-current.tsv
+```
+
+The benchmark harness covers instance validation, SIMD translation, paint batching, clip culling, primitive building, scratch reuse, and command queue emission.
 
 ## Custom Shader Widgets
 
@@ -78,6 +88,8 @@ The `gpu_core` module owns the low-level GPU acceleration path used by the rende
 
 `Renderer` uses this module internally, so existing widgets benefit from it without API changes.
 
+More detail is documented in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
 ## Frame Scheduling
 
 AethelGUI does not rely on a fixed FPS cap by default. Widgets can request a repaint interval through `Widget::repaint_interval()`, and `GuiManager::next_repaint_interval()` feeds the `FrameScheduler`. Idle frames use `ControlFlow::Wait`; focused text, active drags, popups, and animated shaders use `WaitUntil` deadlines so they continue updating even when the mouse is still.
@@ -91,6 +103,7 @@ cargo fmt --all
 cargo check --release
 cargo clippy --release --all-targets -- -D warnings
 cargo test --release
+cargo run --release --example bench -- --quick
 cargo build --release --examples
 cargo build --release
 ```

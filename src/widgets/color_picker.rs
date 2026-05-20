@@ -2,11 +2,10 @@ use crate::core::input::{InputManager, SpecialKey};
 use crate::core::renderer::WidgetInstance;
 use crate::gui::geometry::{BoxConstraints, Point, Rect, Size};
 use crate::gui::paint::PaintCtx;
+use crate::gui::text::{set_buffer_size, set_buffer_text, shape_text, text_area};
 use crate::gui::widget::Widget;
 use glam::Vec2;
-use glyphon::{
-    Attrs, Buffer, Color as GColor, Family, FontSystem, Metrics, Shaping, TextArea, TextBounds,
-};
+use glyphon::{Attrs, Buffer, Color as GColor, Family, FontSystem, Metrics, TextArea, TextBounds};
 use std::any::Any;
 use std::time::Duration;
 use winit::event::MouseButton;
@@ -905,16 +904,16 @@ impl Widget for ColorPicker {
 
         let mk = |fs: &mut FontSystem, text: &str| -> Buffer {
             let mut b = Buffer::new(fs, Metrics::new(FONT_SZ, FONT_SZ + 3.0));
-            b.set_size(fs, 200.0, FONT_SZ + 4.0);
-            b.set_text(
+            set_buffer_size(&mut b, fs, 200.0, FONT_SZ + 4.0);
+            set_buffer_text(
+                &mut b,
                 fs,
                 text,
                 Attrs::new()
                     .family(Family::Monospace)
                     .color(GColor::rgba(210, 210, 220, 255)),
-                Shaping::Basic,
             );
-            b.shape_until_scroll(fs);
+            shape_text(&mut b, fs);
             b
         };
 
@@ -1026,19 +1025,18 @@ impl Widget for ColorPicker {
 }
 
 fn push_text_area<'a>(buf: &'a Buffer, x: f32, y: f32, max_w: f32, areas: &mut Vec<TextArea<'a>>) {
-    areas.push(TextArea {
-        buffer: buf,
-        left: x,
-        top: y,
-        scale: 1.0,
-        bounds: TextBounds {
+    areas.push(text_area(
+        buf,
+        x,
+        y,
+        TextBounds {
             left: x as i32,
             top: y as i32,
             right: (x + max_w) as i32,
             bottom: (y + FONT_SZ + 4.0) as i32,
         },
-        default_color: GColor::rgba(210, 210, 220, 255),
-    });
+        GColor::rgba(210, 210, 220, 255),
+    ));
 }
 
 fn push_border(out: &mut Vec<WidgetInstance>, rect: Rect, color: [f32; 4], thickness: f32) {

@@ -7,7 +7,7 @@ pub mod widgets;
 
 mod app;
 
-pub use app::AethelGui;
+pub use app::{AethelGui, AethelRunError};
 pub use gui::binding::{
     BoolSignal, F32Signal, I32Signal, SelectionSignal, TextSignal, U32Signal, VecSignal,
 };

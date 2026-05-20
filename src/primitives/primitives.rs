@@ -1,4 +1,4 @@
-﻿use crate::core::input::InputManager;
+use crate::core::input::InputManager;
 use crate::core::renderer::WidgetInstance;
 use crate::core::simd;
 use crate::gui::geometry::{BoxConstraints, Point as GeomPoint, Rect as GeomRect, Size};
@@ -258,20 +258,21 @@ pub mod helpers {
             .to_outline_instances()
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn draw_triangle_stroke(
-        x1: f32,
-        y1: f32,
-        x2: f32,
-        y2: f32,
-        x3: f32,
-        y3: f32,
+        points: [[f32; 2]; 3],
         color: [f32; 4],
         width: f32,
     ) -> Vec<WidgetInstance> {
-        Triangle::new(x1, y1, x2, y2, x3, y3)
-            .color(color)
-            .to_stroke_instances(width)
+        Triangle::new(
+            points[0][0],
+            points[0][1],
+            points[1][0],
+            points[1][1],
+            points[2][0],
+            points[2][1],
+        )
+        .color(color)
+        .to_stroke_instances(width)
     }
 
     pub fn draw_circle(x: f32, y: f32, radius: f32, color: [f32; 4]) -> Vec<WidgetInstance> {

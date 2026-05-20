@@ -4,9 +4,10 @@ use crate::gui::binding::TextSignal;
 use crate::gui::command::{CommandId, UpdateCtx};
 use crate::gui::geometry::{BoxConstraints, Point, Rect, Size};
 use crate::gui::paint::PaintCtx;
+use crate::gui::text::{set_buffer_size, set_buffer_text, shape_text, text_area};
 use crate::gui::widget::Widget;
 use glam::Vec2;
-use glyphon::{Attrs, Buffer, Color, Family, FontSystem, Metrics, Shaping, TextArea, TextBounds};
+use glyphon::{Attrs, Buffer, Color, Family, FontSystem, Metrics, TextArea, TextBounds};
 use std::any::Any;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -569,7 +570,9 @@ impl Widget for TextInput {
             bufs.push(Buffer::new(fs, Metrics::new(FONT_SZ, LINE_H)));
             return;
         }
-        let display = display_opt.unwrap();
+        let Some(display) = display_opt else {
+            return;
+        };
         let col = if is_ph {
             Color::rgba(95, 95, 110, 170)
         } else {
@@ -577,14 +580,14 @@ impl Widget for TextInput {
         };
 
         let mut buf = Buffer::new(fs, Metrics::new(FONT_SZ, LINE_H));
-        buf.set_size(fs, f32::INFINITY, LINE_H + 4.0);
-        buf.set_text(
+        set_buffer_size(&mut buf, fs, f32::INFINITY, LINE_H + 4.0);
+        set_buffer_text(
+            &mut buf,
             fs,
             &display,
             Attrs::new().family(Family::SansSerif).color(col),
-            Shaping::Advanced,
         );
-        buf.shape_until_scroll(fs);
+        shape_text(&mut buf, fs);
 
         if !is_ph {
             let n = self.char_count();
@@ -641,19 +644,18 @@ impl Widget for TextInput {
                 Color::rgba(225, 225, 238, 255)
             };
 
-            areas.push(TextArea {
-                buffer: buf,
+            areas.push(text_area(
+                buf,
                 left,
                 top,
-                scale: 1.0,
-                bounds: TextBounds {
+                TextBounds {
                     left: tl,
                     top: tt,
                     right: tr,
                     bottom: tb,
                 },
-                default_color: col,
-            });
+                col,
+            ));
             *bi += 1;
         }
     }

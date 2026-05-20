@@ -581,7 +581,9 @@ impl Simulation {
         hue: f32,
     ) {
         let stars = self.star_snapshot();
-        let (nearest, dist) = nearest_star(pos, &stars).expect("seed stars");
+        let Some((nearest, dist)) = nearest_star(pos, &stars) else {
+            return;
+        };
         let tangent = orbital_tangent((pos - nearest.pos).normalize_or_zero());
         let speed = (nearest.mass / dist.max(90.0)).sqrt() * 5.6;
         let color = palette(hue);
