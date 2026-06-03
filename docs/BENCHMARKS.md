@@ -35,9 +35,10 @@ These benchmarks intentionally avoid window creation and GPU submission, so they
 
 ## Optimization Notes
 
-The `0.1.4` CPU pass targets the paths that showed the clearest sustained wins:
+The `0.3.0` CPU pass targets the paths that showed the clearest sustained wins:
 
 - inactive clip bounds are no longer validated for every unclipped instance;
+- unclipped instances without an active clip return before clip-stack resolution;
 - custom shader batch keys return early for built-in shader modes before checking `is_finite()`;
 - `ClipRect::intersects` computes edge values once per comparison;
 - retained primitive line bounds use conservative endpoint bounds instead of recomputing rotated rectangle bounds with `sin`/`cos` for every segment.
@@ -47,14 +48,16 @@ Avoid accepting a micro-optimization solely because the Rust source looks shorte
 
 ## Latest Benchmark Results
 
+Measured on June 2, 2026 with `cargo run --release --example bench`. No saved baseline TSV was present in the workspace for this run, so speedup is not reported here.
+
 | Benchmark | Iterations | Best ns/it | Mean ns/it | Throughput | Speedup |
 |---|---:|---:|---:|---:|---:|
-| `sanitize_instances` | 180 | 57,378.3 | 62,551.5 | 285.54M instances/s | 1.23x |
-| `translate_instances` | 220 | 11,906.8 | 12,365.7 | 1.376B instances/s | 0.98x |
-| `paint_batches` | 220 | 90,822.7 | 92,533.5 | 90.20M rects/s | 0.90x |
-| `paint_clip_cull` | 220 | 87,588.2 | 88,841.2 | 93.53M rects/s | 1.06x |
-| `primitive_builder` | 320 | 76,525.6 | 84,965.5 | 53.52M segments/s | 1.39x |
-| `scratch_reuse` | 18,000 | 47.4 | 50.1 | 21.08M frames/s | 0.90x |
-| `command_queue` | 1,800 | 17,137.1 | 18,430.9 | 478.03M commands/s | 0.96x |
+| `sanitize_instances` | 180 | 66,378.9 | 72,215.7 | 246.83M instances/s | - |
+| `translate_instances` | 220 | 13,300.0 | 14,468.8 | 1.232B instances/s | - |
+| `paint_batches` | 220 | 89,979.1 | 94,170.0 | 91.04M rects/s | - |
+| `paint_clip_cull` | 220 | 82,675.9 | 84,914.8 | 99.09M rects/s | - |
+| `primitive_builder` | 320 | 48,284.7 | 51,884.4 | 84.83M segments/s | - |
+| `scratch_reuse` | 18,000 | 48.3 | 50.9 | 20.70M frames/s | - |
+| `command_queue` | 1,800 | 19,628.0 | 20,810.1 | 417.36M commands/s | - |
 
 Values above `1.00x` are faster than the saved baseline. These are CPU-side microbenchmarks measured in release mode; they intentionally exclude window creation, GPU upload, render pass execution, presentation, and driver scheduling.

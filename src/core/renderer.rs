@@ -36,6 +36,63 @@ fn select_present_mode(caps: &SurfaceCapabilities) -> Option<PresentMode> {
     }
 }
 
+fn select_alpha_mode(caps: &SurfaceCapabilities, transparent: bool) -> Option<CompositeAlphaMode> {
+    if transparent {
+        for mode in [
+            CompositeAlphaMode::PreMultiplied,
+            CompositeAlphaMode::PostMultiplied,
+            CompositeAlphaMode::Inherit,
+            CompositeAlphaMode::Auto,
+        ] {
+            if caps.alpha_modes.contains(&mode) {
+                return Some(mode);
+            }
+        }
+    }
+
+    if caps.alpha_modes.contains(&CompositeAlphaMode::Opaque) {
+        Some(CompositeAlphaMode::Opaque)
+    } else {
+        caps.alpha_modes.first().copied()
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct RendererOptions {
+    pub clear_color: Color,
+    pub transparent: bool,
+}
+
+impl RendererOptions {
+    pub const fn new(clear_color: Color, transparent: bool) -> Self {
+        Self {
+            clear_color,
+            transparent,
+        }
+    }
+
+    pub const fn overlay() -> Self {
+        Self {
+            clear_color: Color::TRANSPARENT,
+            transparent: true,
+        }
+    }
+}
+
+impl Default for RendererOptions {
+    fn default() -> Self {
+        Self {
+            clear_color: Color {
+                r: 0.05,
+                g: 0.05,
+                b: 0.05,
+                a: 1.0,
+            },
+            transparent: false,
+        }
+    }
+}
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct WidgetInstance {
@@ -147,10 +204,18 @@ pub struct Renderer {
     active_text_layers: usize,
     text_renderer_overlay: TextRenderer,
     overlay_text_active: bool,
+    clear_color: Color,
 }
 
 impl Renderer {
     pub async fn new(window: Arc<Window>) -> Result<Self, RendererInitError> {
+        Self::new_with_options(window, RendererOptions::default()).await
+    }
+
+    pub async fn new_with_options(
+        window: Arc<Window>,
+        options: RendererOptions,
+    ) -> Result<Self, RendererInitError> {
         let mut instance_desc = InstanceDescriptor::new_without_display_handle();
         instance_desc.backends = select_backends();
         let instance = Instance::new(instance_desc);
@@ -189,10 +254,7 @@ impl Renderer {
             height: surface_size.height.max(1),
             present_mode: select_present_mode(&caps)
                 .ok_or(RendererInitError::MissingPresentMode)?,
-            alpha_mode: caps
-                .alpha_modes
-                .first()
-                .copied()
+            alpha_mode: select_alpha_mode(&caps, options.transparent)
                 .ok_or(RendererInitError::MissingAlphaMode)?,
             view_formats: vec![],
             desired_maximum_frame_latency: 1,
@@ -283,6 +345,7 @@ impl Renderer {
             active_text_layers: 0,
             text_renderer_overlay,
             overlay_text_active: false,
+            clear_color: options.clear_color,
         })
     }
 
@@ -445,12 +508,7 @@ impl Renderer {
                     depth_slice: None,
                     resolve_target: None,
                     ops: Operations {
-                        load: LoadOp::Clear(Color {
-                            r: 0.05,
-                            g: 0.05,
-                            b: 0.05,
-                            a: 1.0,
-                        }),
+                        load: LoadOp::Clear(self.clear_color),
                         store: StoreOp::Store,
                     },
                 })],
@@ -534,12 +592,7 @@ impl Renderer {
                     depth_slice: None,
                     resolve_target: None,
                     ops: Operations {
-                        load: LoadOp::Clear(Color {
-                            r: 0.05,
-                            g: 0.05,
-                            b: 0.05,
-                            a: 1.0,
-                        }),
+                        load: LoadOp::Clear(self.clear_color),
                         store: StoreOp::Store,
                     },
                 })],
@@ -659,12 +712,7 @@ impl Renderer {
                         load: if has_prepass {
                             LoadOp::Load
                         } else {
-                            LoadOp::Clear(Color {
-                                r: 0.05,
-                                g: 0.05,
-                                b: 0.05,
-                                a: 1.0,
-                            })
+                            LoadOp::Clear(self.clear_color)
                         },
                         store: StoreOp::Store,
                     },
@@ -798,5 +846,37 @@ mod tests {
         assert!(instance.radius.is_finite());
         assert!(instance.mode.is_finite());
         assert!(instance.rotation.is_finite());
+    }
+
+    #[test]
+    fn opaque_alpha_mode_is_preferred_for_regular_windows() {
+        let caps = SurfaceCapabilities {
+            alpha_modes: vec![
+                CompositeAlphaMode::PreMultiplied,
+                CompositeAlphaMode::Opaque,
+            ],
+            ..SurfaceCapabilities::default()
+        };
+
+        assert_eq!(
+            select_alpha_mode(&caps, false),
+            Some(CompositeAlphaMode::Opaque)
+        );
+    }
+
+    #[test]
+    fn transparent_alpha_mode_is_preferred_for_overlay_windows() {
+        let caps = SurfaceCapabilities {
+            alpha_modes: vec![
+                CompositeAlphaMode::Opaque,
+                CompositeAlphaMode::PreMultiplied,
+            ],
+            ..SurfaceCapabilities::default()
+        };
+
+        assert_eq!(
+            select_alpha_mode(&caps, true),
+            Some(CompositeAlphaMode::PreMultiplied)
+        );
     }
 }

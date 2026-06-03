@@ -220,6 +220,24 @@ impl GuiManager {
         idx
     }
 
+    pub fn take_widgets_for_rebuild(&mut self) -> Vec<Box<dyn Widget>> {
+        self.clear_widget_relations();
+        std::mem::take(&mut self.widgets)
+    }
+
+    pub fn replace_widgets_for_rebuild(&mut self, widgets: Vec<Box<dyn Widget>>) {
+        self.clear_widget_relations();
+        self.widgets = widgets;
+    }
+
+    fn clear_widget_relations(&mut self) {
+        self.clip_groups.clear();
+        self.relayout_groups.clear();
+        self.z_order.panel_indices.clear();
+        self.managed_widgets.clear();
+        self.text_layer_specs.clear();
+    }
+
     pub fn register_panel(&mut self, panel_idx: usize) {
         self.z_order.register(panel_idx);
     }

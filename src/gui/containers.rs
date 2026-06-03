@@ -7,6 +7,7 @@ use crate::gui::paint::PaintCtx;
 use crate::gui::widget::Widget;
 use glyphon::{Buffer as TextBuffer, FontSystem, TextArea};
 use std::any::Any;
+use std::time::Duration;
 
 pub struct Flexible {
     pub child: Box<dyn Widget>,
@@ -412,6 +413,19 @@ impl Widget for Flex {
         self.children.iter().any(|item| item.child.captures_input())
     }
 
+    fn requests_repaint(&self) -> bool {
+        self.children
+            .iter()
+            .any(|item| item.child.requests_repaint())
+    }
+
+    fn repaint_interval(&self) -> Option<Duration> {
+        self.children
+            .iter()
+            .filter_map(|item| item.child.repaint_interval())
+            .min()
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -453,5 +467,68 @@ impl Flex {
                 (gap, self.spacing + gap)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::widgets::TextInput;
+
+    #[test]
+    fn flex_forwards_focused_text_input_repaint_interval() {
+        let mut input = TextInput::new([0.0, 0.0], [160.0, 32.0], "Name");
+        input.focus();
+        let flex = Flex::column().with_child(Box::new(input));
+
+        assert!(Widget::requests_repaint(&flex));
+        assert_eq!(
+            Widget::repaint_interval(&flex),
+            Some(Duration::from_millis(500))
+        );
+    }
+
+    struct RepaintProbe {
+        interval: Option<Duration>,
+    }
+
+    impl Widget for RepaintProbe {
+        fn update(&mut self, _dt: f32, _input: &InputManager) {}
+
+        fn instances(&self) -> Vec<WidgetInstance> {
+            Vec::new()
+        }
+
+        fn requests_repaint(&self) -> bool {
+            self.interval.is_some()
+        }
+
+        fn repaint_interval(&self) -> Option<Duration> {
+            self.interval
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
+        }
+    }
+
+    #[test]
+    fn flex_uses_shortest_child_repaint_interval() {
+        let flex = Flex::row()
+            .with_child(Box::new(RepaintProbe {
+                interval: Some(Duration::from_millis(40)),
+            }))
+            .with_child(Box::new(RepaintProbe {
+                interval: Some(Duration::from_millis(16)),
+            }));
+
+        assert_eq!(
+            Widget::repaint_interval(&flex),
+            Some(Duration::from_millis(16))
+        );
     }
 }

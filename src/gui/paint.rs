@@ -358,11 +358,16 @@ impl<'a> PaintCtx<'a> {
             return;
         }
 
+        let overlay_escapes_clip =
+            self.layer == RenderLayer::Overlay && self.overlay_policy == OverlayPolicy::EscapeClip;
+        if instance.use_clip <= 0.5 && (self.clips.is_empty() || overlay_escapes_clip) {
+            instance.use_clip = 0.0;
+            self.frame.push(self.layer, None, instance);
+            return;
+        }
+
         let instance_clip = InstanceClip::from_instance(&instance);
-        let resolved_clip = if self.layer == RenderLayer::Overlay
-            && self.overlay_policy == OverlayPolicy::EscapeClip
-            && instance_clip.rect.is_none()
-        {
+        let resolved_clip = if overlay_escapes_clip && instance_clip.rect.is_none() {
             Some(None)
         } else {
             self.clips.resolve(instance_clip)
@@ -426,6 +431,28 @@ mod tests {
 
         assert_eq!(frame.instances().len(), 0);
         assert_eq!(frame.stats().culled_by_clip, 1);
+    }
+
+    #[test]
+    fn overlay_rect_escapes_clip_by_default() {
+        let mut frame = FramePaint::new();
+        let mut ctx = PaintCtx::new(&mut frame);
+        let Some(token) = ctx.push_clip_rect(ClipRect {
+            x: 0.0,
+            y: 0.0,
+            width: 10.0,
+            height: 10.0,
+        }) else {
+            unreachable!("valid root clip should push");
+        };
+
+        ctx.set_layer(RenderLayer::Overlay);
+        ctx.push_rect(PaintRect::new([20.0, 20.0], [5.0, 5.0], [1.0; 4]));
+        ctx.pop_clip(token);
+
+        assert_eq!(frame.instances().len(), 1);
+        assert_eq!(frame.instances()[0].use_clip, 0.0);
+        assert_eq!(frame.overlay_batches().len(), 1);
     }
 
     #[test]

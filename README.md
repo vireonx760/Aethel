@@ -1,13 +1,19 @@
 # AethelGUI
 
-AethelGUI is an attempt at a retained/immediate hybrid Rust GUI runtime built on `wgpu`, `winit`, and `glyphon`.
-Version `0.1.4` is the migration baseline toward the `0.2.0` foundation: current crates, explicit renderer errors, overlay-safe painting, retained scratch storage, and CI-ready verification.
+A retained-first GPU GUI runtime for Rust built on `wgpu`, `winit`, and `glyphon`.
+
+Version `0.3.0` is the developer preview: prelude-first public API, immediate-style UI construction over retained widgets, stable widget keys, response objects, examples, and clearer public/experimental boundaries.
 
 ## Highlights
 
 - Event-driven frame scheduler with idle `Wait` behavior and dirty redraws.
+- `aethel_gui::prelude::*` for short examples and app code.
+- Immediate-style `AethelGui::run_ui` API backed by retained widget instances.
+- `Response` values for clicks, changes, focus, hover, and active state.
+- Focused widgets can request timed idle repaints without forcing the whole app into a busy loop.
 - Batched widget rendering with clip/scissor support.
 - Layered text rendering for panel and overlay ordering.
+- Overlay windows use transparent surface compositing and transparent frame clears when requested.
 - Typed bindings and command helpers for low-overhead widget interactions.
 - Custom WGSL shader pipelines selected per render batch.
 - Retained scratch storage for paint/text paths to avoid warm-frame allocations.
@@ -18,17 +24,32 @@ Version `0.1.4` is the migration baseline toward the `0.2.0` foundation: current
 ## Quick Start
 
 ```rust
-use aethel_gui::{AethelGui, widgets::*};
+use aethel_gui::prelude::*;
 
-fn main() -> Result<(), aethel_gui::AethelRunError> {
+fn main() -> Result {
+    let mut enabled = true;
+
     AethelGui::new()
         .title("AethelGUI")
         .size(1200, 800)
-        .run(|gui| {
-            gui.add(Label::new([24.0, 24.0], "AethelGUI").scale(32.0));
-            gui.add(Button::new([24.0, 84.0], [180.0, 42.0], "Run"));
+        .run_ui(move |ui| {
+            ui.panel("settings", |ui| {
+                ui.label("Hello from AethelGUI");
+
+                if ui.button("Click me").clicked() {
+                    println!("clicked");
+                }
+
+                ui.checkbox("Enabled", &mut enabled);
+            });
         })
 }
+```
+
+Run the basic widgets preview:
+
+```powershell
+cargo run --release --example basic_widgets
 ```
 
 Run the main demo:
@@ -89,6 +110,12 @@ The `gpu_core` module owns the low-level GPU acceleration path used by the rende
 `Renderer` uses this module internally, so existing widgets benefit from it without API changes.
 
 More detail is documented in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
+## Current Status
+
+AethelGUI is a developer preview. It is not trying to replace mature GUI frameworks yet. The current focus is GPU-heavy tools, simulations, editors, and experimental interfaces where retained state, custom rendering, overlays, and low-allocation hot paths matter.
+
+Recommended public entry points are documented in [`docs/PUBLIC_API.md`](docs/PUBLIC_API.md). Getting started material is in [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md).
 
 ## Frame Scheduling
 

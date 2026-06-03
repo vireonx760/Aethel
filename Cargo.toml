@@ -1,9 +1,18 @@
 [package]
 name = "aethel_gui"
-version = "0.1.4"
+version = "0.3.0"
 edition = "2024"
 license = "MPL-2.0"
 authors = ["vireonx"]
+description = "A retained-first GPU GUI runtime for Rust built on wgpu."
+readme = "README.md"
+keywords = ["gui", "wgpu", "ui", "graphics", "rust"]
+categories = ["gui", "graphics"]
+
+[features]
+default = []
+debug_overlay = []
+experimental = []
 
 [dependencies]
 wgpu = "29.0.3"

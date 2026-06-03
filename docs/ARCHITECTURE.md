@@ -1,6 +1,6 @@
 # AethelGUI Architecture
 
-This document describes the `0.1.4` baseline and the direction for the `0.2.0` foundation.
+This document describes the retained 0.2.0 foundation and the 0.3.0 developer-preview API layer.
 
 ## Retained-First Model
 
@@ -8,15 +8,21 @@ AethelGUI keeps widget objects and frame-owned rendering state across frames. Wi
 
 The compatibility method `instances()` remains available for simple widgets and existing integrations. New widgets should prefer `paint()`, `paint_overlay()`, and retained primitive batches because those APIs preserve batching, clipping, and scratch-buffer reuse.
 
+The `AethelGui::run_ui` entry point is immediate-style at the API boundary but retained-first internally. It rebuilds the visible widget order each frame while reusing previous widget instances by stable `WidgetId`.
+
 ## Widget Identity
 
 `GuiManager::add` returns a stable widget index for the lifetime of the manager. Higher-level grouping APIs, including clip groups, relayout groups, and panel z-order, store those indices rather than borrowing widget references. This keeps identity stable while allowing the manager to update layout and paint ordering in separate passes.
 
-The current identity model is intentionally simple. Before `0.2.0`, public APIs should avoid implying that indices remain valid after a future removal API unless the removal behavior is explicitly defined.
+The current identity model is intentionally simple. Public APIs should not imply that indices remain valid after a future removal API unless the removal behavior is explicitly defined.
+
+The 0.3.0 `Ui` layer derives stable `WidgetId` values from widget kind, key, and `ui.with_id(...)` scopes. Matching ids reuse retained widget instances across rebuilds.
 
 ## Dirty Scheduling
 
 The app layer uses event-driven `winit` scheduling. Widgets can request animation with `requests_repaint()` or a custom `repaint_interval()`. The scheduler waits when the scene is idle and requests redraws only when input, layout, overlay state, or widget repaint intervals require it.
+
+`TextInput` uses this path for cursor blinking: a focused field schedules redraws at the blink period, so the event loop can sleep between ticks without freezing the cursor.
 
 Dirty state is still coarse at the manager level. The stable target is to keep the external API retained-first while making internal dirty flags more granular: layout dirty, paint dirty, text dirty, and GPU upload dirty.
 
@@ -25,6 +31,8 @@ Dirty state is still coarse at the manager level. The stable target is to keep t
 Painting is collected into `FramePaint`, which owns the frame's widget instances and render batches. Regular widgets are painted first, panel groups are painted according to z-order, and overlay widgets are painted into an explicit overlay layer.
 
 Text is prepared after paint collection. `GuiManager` records text layer boundaries from paint ordering so text can be rendered at the same logical layer as its widget instances. Overlay text is prepared and rendered after regular text, matching overlay instances.
+
+Window overlay mode is separate from widget overlay ordering. `AethelGui::overlay(true)` creates a transparent always-on-top window, and `RendererOptions::overlay()` clears frames with transparent alpha while selecting a non-opaque surface alpha mode when the platform exposes one.
 
 ## GPU Path
 
@@ -47,4 +55,4 @@ Code that relies on internal invariants should prefer explicit `match` handling 
 
 Widgets can return `CustomShader` values from `custom_shaders()`. The renderer registers each custom WGSL source once and uses `ShaderMode::Custom` batch keys to switch pipelines during draw planning.
 
-Custom shaders currently use the same instance vertex format as built-in widgets. A future API should make that constraint explicit before `0.2.0`.
+Custom shaders currently use the same instance vertex format as built-in widgets. Shader authors should treat that layout as part of the `0.3.0` developer-preview contract until a dedicated custom-vertex API exists.

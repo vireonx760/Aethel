@@ -1,7 +1,8 @@
 use crate::core::input::InputManager;
-use crate::core::renderer::{Renderer, RendererInitError};
+use crate::core::renderer::{Renderer, RendererInitError, RendererOptions};
 use crate::core::scheduler::{FrameScheduler, RedrawReason};
 use crate::gui::widget::GuiManager;
+use crate::ui::{Ui, UiState};
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
@@ -27,6 +28,8 @@ pub enum AethelRunError {
     Window(OsError),
     Renderer(RendererInitError),
 }
+
+pub type Result<T = ()> = std::result::Result<T, AethelRunError>;
 
 impl fmt::Display for AethelRunError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -90,7 +93,7 @@ impl AethelGui {
         self
     }
 
-    pub fn run<F>(self, build_gui: F) -> Result<(), AethelRunError>
+    pub fn run<F>(self, build_gui: F) -> Result
     where
         F: FnOnce(&mut GuiManager) + 'static,
     {
@@ -99,6 +102,23 @@ impl AethelGui {
         build_gui(&mut gui);
 
         let mut app = RuntimeApp::new(self, gui);
+        let run_result = event_loop
+            .run_app(&mut app)
+            .map_err(AethelRunError::EventLoop);
+
+        if let Some(err) = app.fatal_error {
+            return Err(err);
+        }
+
+        run_result
+    }
+
+    pub fn run_ui<F>(self, build_ui: F) -> Result
+    where
+        F: FnMut(&mut Ui<'_>) + 'static,
+    {
+        let event_loop = EventLoop::new()?;
+        let mut app = RuntimeApp::new_immediate(self, build_ui);
         let run_result = event_loop
             .run_app(&mut app)
             .map_err(AethelRunError::EventLoop);
@@ -129,6 +149,12 @@ struct RuntimeApp {
     frame_budget: Option<Duration>,
     text_buffers: Vec<glyphon::Buffer>,
     fatal_error: Option<AethelRunError>,
+    immediate: Option<ImmediateRuntime>,
+}
+
+struct ImmediateRuntime {
+    state: UiState,
+    build: Box<dyn FnMut(&mut Ui<'_>)>,
 }
 
 impl RuntimeApp {
@@ -150,7 +176,35 @@ impl RuntimeApp {
             frame_budget,
             text_buffers: Vec::with_capacity(128),
             fatal_error: None,
+            immediate: None,
         }
+    }
+
+    fn new_immediate<F>(config: AethelGui, build: F) -> Self
+    where
+        F: FnMut(&mut Ui<'_>) + 'static,
+    {
+        let mut app = Self::new(config, GuiManager::new());
+        app.immediate = Some(ImmediateRuntime {
+            state: UiState::new(),
+            build: Box::new(build),
+        });
+        app
+    }
+
+    fn rebuild_immediate_ui(&mut self) {
+        let Some(immediate) = self.immediate.as_mut() else {
+            return;
+        };
+        let commands = self.gui.commands().to_vec();
+        Ui::rebuild(&mut self.gui, &mut immediate.state, &commands, |ui| {
+            (immediate.build)(ui)
+        });
+    }
+
+    fn register_custom_shaders(&self, renderer: &mut Renderer) {
+        self.gui
+            .for_each_custom_shader(|shader| renderer.register_custom_shader(shader));
     }
 
     fn window_attributes(&self) -> WindowAttributes {
@@ -190,9 +244,9 @@ impl RuntimeApp {
     }
 
     fn redraw(&mut self) {
-        let Some(renderer) = self.renderer.as_mut() else {
+        if self.renderer.is_none() {
             return;
-        };
+        }
 
         let now = Instant::now();
         if let Some(budget) = self.frame_budget
@@ -205,9 +259,17 @@ impl RuntimeApp {
         self.last_frame = now;
 
         self.gui.update(dt, &self.input);
+        self.rebuild_immediate_ui();
         self.input.end_frame();
 
         self.gui.collect_paint();
+
+        let Some(renderer) = self.renderer.as_mut() else {
+            return;
+        };
+        self.gui
+            .for_each_custom_shader(|shader| renderer.register_custom_shader(shader));
+
         let mut text_areas = Vec::with_capacity(self.text_buffers.len().max(128));
         let text_layers = self.gui.prepare_text_layers(
             renderer.font_system(),
@@ -241,7 +303,15 @@ impl ApplicationHandler for RuntimeApp {
             }
         };
 
-        let mut renderer = match pollster::block_on(Renderer::new(Arc::clone(&window))) {
+        let renderer_options = if self.config.overlay {
+            RendererOptions::overlay()
+        } else {
+            RendererOptions::default()
+        };
+        let mut renderer = match pollster::block_on(Renderer::new_with_options(
+            Arc::clone(&window),
+            renderer_options,
+        )) {
             Ok(renderer) => renderer,
             Err(err) => {
                 self.fail(event_loop, err.into());
@@ -249,8 +319,7 @@ impl ApplicationHandler for RuntimeApp {
             }
         };
 
-        self.gui
-            .for_each_custom_shader(|shader| renderer.register_custom_shader(shader));
+        self.register_custom_shaders(&mut renderer);
         self.window_id = Some(window.id());
         self.window = Some(window);
         self.renderer = Some(renderer);

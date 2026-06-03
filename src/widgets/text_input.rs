@@ -16,7 +16,8 @@ use winit::event::MouseButton;
 const FONT_SZ: f32 = 18.0;
 const LINE_H: f32 = 22.0;
 const PAD_X: f32 = 10.0;
-const BLINK: f32 = 0.53;
+const BLINK: f32 = 0.5;
+const BLINK_PERIOD: Duration = Duration::from_millis(500);
 
 pub type TextCallback = Arc<Mutex<dyn FnMut(&str) + Send + Sync>>;
 
@@ -138,6 +139,24 @@ impl TextInput {
         self.cursor_visible = true;
         self.blink_timer = 0.0;
     }
+
+    fn advance_blink(&mut self, dt: f32) {
+        if !dt.is_finite() || dt <= 0.0 {
+            return;
+        }
+
+        self.blink_timer += dt;
+        let periods = (self.blink_timer / BLINK).floor() as u32;
+        if periods == 0 {
+            return;
+        }
+
+        self.blink_timer -= BLINK * periods as f32;
+        if !periods.is_multiple_of(2) {
+            self.cursor_visible = !self.cursor_visible;
+        }
+    }
+
     fn char_count(&self) -> usize {
         self.text.chars().count()
     }
@@ -353,11 +372,7 @@ impl Widget for TextInput {
             return;
         }
 
-        self.blink_timer += dt;
-        if self.blink_timer >= BLINK {
-            self.blink_timer -= BLINK;
-            self.cursor_visible = !self.cursor_visible;
-        }
+        self.advance_blink(dt);
 
         let had_chars = !input.chars_this_frame.is_empty();
         for &ch in &input.chars_this_frame {
@@ -683,7 +698,7 @@ impl Widget for TextInput {
     }
 
     fn repaint_interval(&self) -> Option<Duration> {
-        self.focused.then_some(Duration::from_millis(16))
+        self.focused.then_some(BLINK_PERIOD)
     }
     fn as_any(&self) -> &dyn Any {
         self
@@ -699,5 +714,45 @@ fn clip_info(c: Option<Rect>) -> ([f32; 2], [f32; 2], f32) {
         ([r.x, r.y], [r.x + r.width, r.y + r.height], 1.0)
     } else {
         ([0.0; 2], [1e5; 2], 0.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn focused_text_input_requests_blink_repaint_interval() {
+        let mut input = TextInput::new([0.0, 0.0], [120.0, 32.0], "Search");
+
+        assert_eq!(Widget::repaint_interval(&input), None);
+
+        input.focus();
+
+        assert!(Widget::requests_repaint(&input));
+        assert_eq!(Widget::repaint_interval(&input), Some(BLINK_PERIOD));
+    }
+
+    #[test]
+    fn cursor_blink_advances_after_idle_waits() {
+        let mut input = TextInput::new([0.0, 0.0], [120.0, 32.0], "Search");
+        input.focus();
+
+        input.advance_blink(BLINK + 0.01);
+        assert!(!input.cursor_visible);
+
+        input.advance_blink(BLINK + 0.01);
+        assert!(input.cursor_visible);
+    }
+
+    #[test]
+    fn cursor_blink_preserves_phase_after_multiple_elapsed_periods() {
+        let mut input = TextInput::new([0.0, 0.0], [120.0, 32.0], "Search");
+        input.focus();
+
+        input.advance_blink(BLINK * 3.0 + 0.01);
+
+        assert!(!input.cursor_visible);
+        assert!(input.blink_timer < BLINK);
     }
 }

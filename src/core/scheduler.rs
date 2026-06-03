@@ -30,7 +30,7 @@ impl Default for SchedulerConfig {
     fn default() -> Self {
         Self {
             interaction_linger: Duration::from_millis(150),
-            blink_period: Duration::from_millis(530),
+            blink_period: Duration::from_millis(500),
             idle_after_redraw: true,
         }
     }
